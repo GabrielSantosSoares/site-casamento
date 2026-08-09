@@ -30,18 +30,5 @@
     ".next/dev/types/**/*.ts",
     "**/*.mts"
   ],
-  "exclude": [
-    "node_modules",
-    ".openai",
-    ".vinext",
-    "build",
-    "db",
-    "drizzle",
-    "examples",
-    "scripts",
-    "worker",
-    "app/chatgpt-auth.ts",
-    "drizzle.config.ts",
-    "vite.config.ts"
-  ]
+  "exclude": ["node_modules"]
 }

@@ -400,7 +400,7 @@ export async function POST(request: NextRequest) {
     let hash:string|null=null;
     let senhaTemporaria:string|undefined;
     if(data.acao==="criar"||data.acao==="resetar_senha"){
-      senhaTemporaria=String(randomInt(100000,1000000));
+      senhaTemporaria=String(randomInt(10000000,100000000));
       hash=await criarHashSenha(senhaTemporaria);
     }else if(data.acao==="definir_senha"){
       const nova=String(data.dados.senha??"");
@@ -409,8 +409,16 @@ export async function POST(request: NextRequest) {
     }
     const response=await rpcAdmin("administrar_organizacao_backend",{p_token_hash:tokenHash(token),p_acao:data.acao,p_dados:data.dados,p_hash:hash});
     if(!response?.ok)return NextResponse.json({error:"Não foi possível administrar a organização."},{status:502});
-    const resultado=await response.json() as {ok:boolean;codigo?:string};
-    if(!resultado.ok)return NextResponse.json({error:"Acesso não permitido ou dados inválidos."},{status:403});
+    const resultado=await response.json() as {ok:boolean;codigo?:string;motivo?:string};
+    if(!resultado.ok){
+      const mensagens:Record<string,string>={
+        codigo_invalido:"O código deve ter exatamente 6 letras ou números.",
+        codigo_indisponivel:"Esse código já está sendo usado por um convidado, grupo ou integrante da organização.",
+        usuario_indisponivel:"Esse usuário já está em uso.",
+        dados_invalidos:"Confira o nome, o usuário, a função e o código informados.",
+      };
+      return NextResponse.json({error:mensagens[resultado.motivo??""]??"Acesso não permitido ou dados inválidos."},{status:403});
+    }
     return NextResponse.json({success:true,codigo:resultado.codigo,senha_temporaria:senhaTemporaria});
   }
   if(data.action==="administrar_expiracao"){

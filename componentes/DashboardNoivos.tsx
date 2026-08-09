@@ -253,9 +253,13 @@ export function DashboardNoivos({
   const [orgEditando, setOrgEditando] = useState<Organizacao | null>(null),
     [orgNome, setOrgNome] = useState(""),
     [orgUsuario, setOrgUsuario] = useState(""),
+    [orgCodigo, setOrgCodigo] = useState(""),
     [orgFuncao, setOrgFuncao] = useState<Organizacao["funcao"]>("assessoria"),
     [orgAdmin, setOrgAdmin] = useState(false),
-    [senhaGerada, setSenhaGerada] = useState("");
+    [credenciaisGeradas, setCredenciaisGeradas] = useState<{
+      codigo?: string;
+      senhaTemporaria?: string;
+    } | null>(null);
   const [senhaAtual, setSenhaAtual] = useState(""),
     [novaSenha, setNovaSenha] = useState(""),
     [confirmaNovaSenha, setConfirmaNovaSenha] = useState("");
@@ -411,7 +415,7 @@ export function DashboardNoivos({
     dadosAcao: Record<string, unknown>,
   ) {
     setAviso("");
-    setSenhaGerada("");
+    setCredenciaisGeradas(null);
     const r = await fetch("/api/convite", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -427,8 +431,11 @@ export function DashboardNoivos({
       setAviso(d.error || "Não foi possível salvar.");
       return false;
     }
-    if (d.senha_temporaria)
-      setSenhaGerada(`Senha temporária: ${d.senha_temporaria}`);
+    if (d.codigo || d.senha_temporaria)
+      setCredenciaisGeradas({
+        codigo: d.codigo,
+        senhaTemporaria: d.senha_temporaria,
+      });
     await recarregar();
     return true;
   }
@@ -947,7 +954,7 @@ export function DashboardNoivos({
 
   if (pagina === "convidados")
     return (
-      <div className="panel admin-page">
+      <div className="panel admin-page guest-admin-page">
         <button className="back-link" onClick={() => setPagina("geral")}>
           ← Voltar à visão geral
         </button>
@@ -1024,7 +1031,7 @@ export function DashboardNoivos({
           )}
         </div>
         {!assessoria && (
-          <div className="admin-form">
+          <div className="admin-form guest-limit-form">
             <label>
               Idade máxima para criança{" "}
               <input
@@ -1042,7 +1049,7 @@ export function DashboardNoivos({
           </div>
         )}
         {(!assessoria || editando) && (
-          <form className="admin-form" onSubmit={salvar}>
+          <form className="admin-form guest-editor-form" onSubmit={salvar}>
             <input
               placeholder="Nome da pessoa"
               value={nome}
@@ -1107,7 +1114,7 @@ export function DashboardNoivos({
               </select>
             </label>
             {!assessoria && (
-              <label>
+              <label className="guest-checkbox">
                 <input
                   type="checkbox"
                   checked={crianca}
@@ -1117,7 +1124,7 @@ export function DashboardNoivos({
               </label>
             )}
             {!assessoria && editando && (
-              <label>
+              <label className="guest-checkbox">
                 <input
                   type="checkbox"
                   checked={gestor}
@@ -1155,7 +1162,7 @@ export function DashboardNoivos({
             {aviso}
           </p>
         )}
-        <div className="admin-table">
+        <div className="admin-table guest-admin-table">
           <div className="table-head">
             <span>Pessoa</span>
             <span>Conjunto</span>
@@ -2004,7 +2011,7 @@ export function DashboardNoivos({
         </p>
         {admin && (
           <form
-            className="admin-form"
+            className="admin-form organization-form"
             onSubmit={async (e) => {
               e.preventDefault();
               const ok = await administrarOrganizacao(
@@ -2013,6 +2020,7 @@ export function DashboardNoivos({
                   id: orgEditando?.id,
                   nome: orgNome,
                   usuario: orgUsuario,
+                  codigo: orgCodigo || null,
                   funcao: orgFuncao,
                   administrador: orgAdmin,
                 },
@@ -2021,6 +2029,7 @@ export function DashboardNoivos({
                 setOrgEditando(null);
                 setOrgNome("");
                 setOrgUsuario("");
+                setOrgCodigo("");
                 setOrgFuncao("assessoria");
                 setOrgAdmin(false);
               }
@@ -2042,6 +2051,34 @@ export function DashboardNoivos({
               }
               required
             />
+            <label>
+              Código de acesso
+              <input
+                placeholder={
+                  orgEditando
+                    ? "Código com 6 caracteres"
+                    : "Deixe vazio para gerar automaticamente"
+                }
+                value={orgCodigo}
+                onChange={(e) =>
+                  setOrgCodigo(
+                    e.target.value
+                      .toUpperCase()
+                      .replace(/[^A-Z0-9]/g, "")
+                      .slice(0, 6),
+                  )
+                }
+                minLength={orgCodigo ? 6 : undefined}
+                maxLength={6}
+                pattern="[A-Z0-9]{6}"
+                required={Boolean(orgEditando)}
+                autoComplete="off"
+              />
+              <small>
+                Use 6 letras ou números. O sistema verifica se o código está
+                disponível antes de salvar.
+              </small>
+            </label>
             <select
               value={orgFuncao}
               onChange={(e) =>
@@ -2053,7 +2090,7 @@ export function DashboardNoivos({
               <option value="assessoria">Assessoria</option>
               <option value="administrador">Administrador</option>
             </select>
-            <label>
+            <label className="organization-checkbox">
               <input
                 type="checkbox"
                 checked={orgAdmin}
@@ -2066,10 +2103,21 @@ export function DashboardNoivos({
             </button>
           </form>
         )}
-        {senhaGerada && (
+        {credenciaisGeradas && (
           <p className="success-note">
-            <b>{senhaGerada}</b> — informe ao usuário. No próximo acesso, ele
-            deverá substituí-la.
+            {credenciaisGeradas.codigo && (
+              <>
+                Código de acesso: <b>{credenciaisGeradas.codigo}</b>
+              </>
+            )}
+            {credenciaisGeradas.codigo &&
+              credenciaisGeradas.senhaTemporaria && <br />}
+            {credenciaisGeradas.senhaTemporaria && (
+              <>
+                Senha temporária: <b>{credenciaisGeradas.senhaTemporaria}</b> —
+                informe ao usuário. No próximo acesso, ele deverá substituí-la.
+              </>
+            )}
           </p>
         )}
         {aviso && <p className="error">{aviso}</p>}
@@ -2093,6 +2141,7 @@ export function DashboardNoivos({
                         setOrgEditando(o);
                         setOrgNome(o.nome);
                         setOrgUsuario(o.usuario);
+                        setOrgCodigo(o.codigo ?? "");
                         setOrgFuncao(o.funcao);
                         setOrgAdmin(o.administrador);
                       }}

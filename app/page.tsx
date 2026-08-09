@@ -1435,7 +1435,9 @@ export default function Home() {
                 </h1>
                 <p>
                   {invitation?.senha_criada
-                    ? "Use a senha criada no primeiro acesso."
+                    ? invitation.exige_troca_senha
+                      ? "Use a senha temporária informada pelo administrador. Depois do acesso, você deverá criar uma nova senha."
+                      : "Use a senha criada no primeiro acesso."
                     : "Este é o primeiro acesso. Crie uma senha com pelo menos 8 caracteres."}
                 </p>
                 <form onSubmit={acessarNoivos}>

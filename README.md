@@ -1,59 +1,37 @@
-# Gabriel & Alanna — site do casamento
+# Site de casamento — Gabriel e Alanna
 
-Aplicação Next.js para convites individuais e coletivos, confirmação de
-presença, cortejo, lista de presentes, pagamentos e gestão do evento.
+Aplicação Next.js com Supabase e integração Mercado Pago, preparada para
+publicação pelo GitHub e pela Vercel.
 
-## Publicação na Vercel
+## Desenvolvimento local
 
-O projeto deve ficar diretamente na raiz do repositório. Na Vercel, use:
-
-- Framework Preset: `Next.js`;
-- Root Directory: vazio ou `./`;
-- Node.js: `22.x`;
-- Build Command: padrão (`npm run build`).
-
-Configure estas variáveis sem gravar valores no repositório:
-
-```text
-SUPABASE_URL=
-SUPABASE_PUBLISHABLE_KEY=
-SUPABASE_SECRET_KEY=
-ADMIN_SETUP_KEY=
-MP_CREDENTIAL_ENCRYPTION_KEY=
+```bash
+npm ci
+cp .env.example .env.local
+npm run dev
 ```
 
-`ADMIN_SETUP_KEY` protege a criação da primeira senha do usuário `admin`.
-`MP_CREDENTIAL_ENCRYPTION_KEY` deve ser uma chave Base64 aleatória de 32 bytes.
+Preencha `.env.local` com as credenciais do seu ambiente. Esse arquivo é
+ignorado pelo Git.
 
-As credenciais do Mercado Pago são informadas apenas no painel administrativo.
-O webhook deve apontar para:
+## Produção
 
-```text
-https://SEU-DOMINIO/api/mercado-pago/webhook
-```
+Consulte [GUIA_PUBLICACAO.md](./GUIA_PUBLICACAO.md).
 
 ## Banco de dados
 
-Para um banco novo, execute somente:
+Em um banco novo, execute:
 
 ```text
 supabase/INSTALACAO_COMPLETA_BANCO_NOVO.sql
 ```
 
-Para um banco existente que já recebeu as migrações anteriores, execute:
+Em um banco que já recebeu a migração 033, execute somente:
 
 ```text
-supabase/migration_033_revisao_geral_perfis_notificacoes.sql
+supabase/migration_034_codigos_organizacao_login.sql
 ```
 
-A expiração das reservas é executada pelo Supabase Cron. O arquivo
-`vercel.json` não agenda tarefas na Vercel.
-
-## Validação local
-
-```bash
-npm ci
-npm run lint
-npm test
-npm run build
-```
+A migração 034 permite escolher e alterar o código de integrantes da
+organização. A rotina de reservas vencidas usa o Supabase Cron configurado pela
+migração 032; este pacote não cria um cron adicional na Vercel.
