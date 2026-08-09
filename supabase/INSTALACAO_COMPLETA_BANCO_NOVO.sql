@@ -2754,6 +2754,7 @@ grant execute on function public.alterar_presente_fisico(text,uuid,integer,boole
 notify pgrst,'reload schema';
 commit;
 
+
 -- Código personalizado de convidados (incorpora migration_031)
 create or replace function public.administrar_convidado_com_codigo(
   p_token_hash text, p_acao text, p_dados jsonb
@@ -4148,4 +4149,324 @@ where usuario='admin';
 -- Remove eventos tecnicos gerados pelos gatilhos durante a propria instalacao.
 delete from public.auditoria_administrativa;
 
+commit;
+
+-- ============================================================================
+-- migration_035_grupos_integrados_convidados.sql
+-- ============================================================================
+begin;
+
+-- Permite criar um convidado diretamente em um grupo existente. Quando o
+-- código individual não é informado, ele continua sendo gerado no banco.
+create or replace function public.administrar_convidado_com_codigo(
+  p_token_hash text, p_acao text, p_dados jsonb
+) returns boolean language plpgsql security definer set search_path=public as $$
+declare
+  v_codigo text := upper(trim(coalesce(p_dados->>'codigo_individual','')));
+  v_codigo_grupo text := upper(trim(coalesce(p_dados->>'codigo','')));
+  v_nome text := trim(coalesce(p_dados->>'nome',''));
+  v_funcao text := nullif(trim(coalesce(p_dados->>'funcao','')),'');
+  v_origem text := coalesce(p_dados->>'origem','nao_classificado');
+  v_id uuid;
+  v_convite_id uuid;
+  v_convite_atual uuid;
+  v_convite_destino uuid;
+  v_codigo_antigo text;
+  v_grupo_individual boolean := false;
+begin
+  if p_acao not in ('adicionar_com_codigo','editar_com_codigo')
+    or length(v_nome) not between 2 and 150
+    or v_origem not in ('noivo','noiva','ambos','nao_classificado')
+    or not exists (
+      select 1
+      from public.sessoes_organizacao s
+      join public.organizacao o on o.id=s.organizacao_id
+      where s.token_hash=p_token_hash and s.expira_em>now() and o.ativo
+        and (o.administrador or o.funcao in ('noivo','noiva'))
+    ) then return false; end if;
+
+  if p_acao='adicionar_com_codigo' and v_codigo='' then
+    loop
+      v_codigo:=upper(substr(md5(gen_random_uuid()::text),1,6));
+      exit when not exists(select 1 from public.convites where codigo=v_codigo)
+        and not exists(select 1 from public.convidados where codigo_individual=v_codigo)
+        and not exists(select 1 from public.organizacao where codigo=v_codigo);
+    end loop;
+  end if;
+
+  if v_codigo !~ '^[A-Z0-9]{6}$' then return false; end if;
+  perform pg_advisory_xact_lock(hashtext(v_codigo));
+
+  if p_acao='adicionar_com_codigo' then
+    if exists(select 1 from public.convites where codigo=v_codigo)
+      or exists(select 1 from public.convidados where codigo_individual=v_codigo)
+      or exists(select 1 from public.organizacao where codigo=v_codigo)
+      then return false; end if;
+
+    if v_codigo_grupo<>'' then
+      select id into v_convite_id
+      from public.convites
+      where codigo=v_codigo_grupo and ativo;
+      if v_convite_id is null then return false; end if;
+    else
+      insert into public.convites(codigo,nome_familia,nivel_acesso,perfil_acesso,ativo)
+      values(v_codigo,v_nome,1,'convidado',true)
+      returning id into v_convite_id;
+    end if;
+
+    insert into public.convidados(
+      convite_id,nome,principal,pode_gerenciar,ordem,funcao,
+      codigo_individual,origem,crianca
+    ) values(
+      v_convite_id,v_nome,coalesce((p_dados->>'principal')::boolean,false),
+      coalesce((p_dados->>'pode_gerenciar')::boolean,true),
+      coalesce((select max(ordem)+1 from public.convidados where convite_id=v_convite_id),1),
+      v_funcao,v_codigo,v_origem,coalesce((p_dados->>'crianca')::boolean,false)
+    );
+    return true;
+  end if;
+
+  v_id:=nullif(p_dados->>'id','')::uuid;
+  select g.convite_id,g.codigo_individual,(c.codigo=g.codigo_individual)
+    into v_convite_atual,v_codigo_antigo,v_grupo_individual
+    from public.convidados g
+    join public.convites c on c.id=g.convite_id
+    where g.id=v_id;
+  if v_id is null or v_convite_atual is null
+    or exists(select 1 from public.convites where codigo=v_codigo and id<>v_convite_atual)
+    or exists(select 1 from public.organizacao where codigo=v_codigo)
+    or exists(select 1 from public.convidados where codigo_individual=v_codigo and id<>v_id)
+    then return false; end if;
+
+  select id into v_convite_destino
+  from public.convites
+  where codigo=v_codigo_grupo and ativo;
+  if v_convite_destino is null then return false; end if;
+
+  update public.confirmacoes set convite_id=v_convite_destino where convidado_id=v_id;
+  update public.convidados set
+    convite_id=v_convite_destino,
+    nome=v_nome,
+    principal=coalesce((p_dados->>'principal')::boolean,false),
+    pode_gerenciar=coalesce((p_dados->>'pode_gerenciar')::boolean,false),
+    funcao=v_funcao,
+    codigo_individual=v_codigo,
+    origem=v_origem,
+    crianca=coalesce((p_dados->>'crianca')::boolean,crianca)
+  where id=v_id;
+
+  if v_grupo_individual and v_convite_atual=v_convite_destino then
+    update public.convites set codigo=v_codigo
+    where id=v_convite_atual and codigo=v_codigo_antigo;
+  elsif v_grupo_individual then
+    delete from public.convites c
+    where c.id=v_convite_atual
+      and not exists(select 1 from public.convidados g where g.convite_id=c.id)
+      and not exists(select 1 from public.reservas_presentes r where r.convite_id=c.id);
+  end if;
+  return found;
+exception
+  when unique_violation or invalid_text_representation or not_null_violation then
+    return false;
+end $$;
+
+revoke all on function public.administrar_convidado_com_codigo(text,text,jsonb) from public;
+grant execute on function public.administrar_convidado_com_codigo(text,text,jsonb) to anon,authenticated;
+notify pgrst,'reload schema';
+
+commit;
++-- ============================================================================
+-- migration_036_modelos_duplicidades_gestao_presentes.sql
+-- ============================================================================
+begin;
+
+-- Evita duplicidades acidentais na importação. Uma repetição só é inserida
+-- quando foi revisada e marcada explicitamente como outro item pela interface.
+create or replace function public.importar_presentes_automatico(
+  p_token_hash text,
+  p_linhas jsonb
+) returns integer
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_item jsonb; v_nome text; v_categoria text; v_categoria_id uuid;
+  v_descricao text; v_imagens text[]; v_valor numeric; v_quantidade integer;
+  v_ordem integer; v_total integer := 0; v_permitir_duplicado boolean;
+  v_nome_normalizado text;
+begin
+  if not exists (
+    select 1 from public.sessoes_organizacao s
+    join public.organizacao o on o.id = s.organizacao_id
+    where s.token_hash = p_token_hash and s.expira_em > now() and o.ativo
+      and (o.administrador or o.funcao in ('noivo','noiva'))
+  ) then return -1; end if;
+  if jsonb_typeof(p_linhas) <> 'array'
+    or jsonb_array_length(p_linhas) not between 1 and 1000
+  then return -2; end if;
+
+  for v_item in select * from jsonb_array_elements(p_linhas) loop
+    v_nome := trim(coalesce(v_item->>'nome',''));
+    v_categoria := trim(coalesce(v_item->>'categoria',''));
+    v_descricao := nullif(trim(coalesce(v_item->>'descricao','')), '');
+    v_valor := (v_item->>'valor')::numeric;
+    v_quantidade := greatest(
+      1,
+      least(10000, coalesce((v_item->>'quantidade')::integer,1))
+    );
+    v_permitir_duplicado := coalesce(
+      (v_item->>'permitir_duplicado')::boolean,
+      false
+    );
+    select coalesce(array_agg(value), '{}') into v_imagens
+    from jsonb_array_elements_text(
+      coalesce(v_item->'links_fotos','[]'::jsonb)
+    );
+    if length(v_nome)<2 or length(v_nome)>150 or length(v_categoria)<2
+      or v_valor<0 or v_valor>1000000 or cardinality(v_imagens)>10
+      or exists(
+        select 1 from unnest(v_imagens) imagem
+        where imagem !~* '^https?://'
+      )
+    then return -2; end if;
+
+    v_nome_normalizado := lower(
+      regexp_replace(trim(v_nome), '[[:space:]]+', ' ', 'g')
+    );
+    if not v_permitir_duplicado and exists (
+      select 1 from public.presentes p
+      where p.ativo
+        and lower(regexp_replace(trim(p.nome), '[[:space:]]+', ' ', 'g'))
+          = v_nome_normalizado
+    ) then
+      continue;
+    end if;
+
+    select id into v_categoria_id
+    from public.categorias_presentes
+    where lower(trim(nome))=lower(v_categoria)
+    order by ativo desc, ordem
+    limit 1;
+    if v_categoria_id is null then
+      select coalesce(max(ordem),0)+1 into v_ordem
+      from public.categorias_presentes;
+      insert into public.categorias_presentes(nome,ordem)
+      values(v_categoria,v_ordem)
+      returning id into v_categoria_id;
+    else
+      update public.categorias_presentes set ativo=true where id=v_categoria_id;
+    end if;
+
+    select coalesce(max(ordem),0)+1 into v_ordem from public.presentes;
+    insert into public.presentes(
+      nome,descricao,preco_centavos,quantidade_total,ordem,categoria_id,imagens
+    ) values(
+      v_nome,v_descricao,round(v_valor*100)::integer,v_quantidade,
+      v_ordem,v_categoria_id,v_imagens
+    );
+    v_total := v_total + 1;
+  end loop;
+  return v_total;
+exception
+  when invalid_text_representation or numeric_value_out_of_range
+    or not_null_violation or check_violation
+  then return -2;
+end $$;
+
+-- Cadastro manual e remoção segura. A exclusão é lógica para que assinaturas,
+-- pagamentos e auditoria continuem íntegros mesmo após o item sair da lista.
+create or replace function public.administrar_presente_dashboard(
+  p_token_hash text,
+  p_acao text,
+  p_dados jsonb
+) returns boolean
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_id uuid; v_nome text; v_descricao text; v_categoria_id uuid;
+  v_preco_centavos integer; v_quantidade_total integer; v_imagens text[];
+  v_ordem integer; v_permitir_duplicado boolean; v_nome_normalizado text;
+begin
+  if not exists (
+    select 1 from public.sessoes_organizacao s
+    join public.organizacao o on o.id=s.organizacao_id
+    where s.token_hash=p_token_hash and s.expira_em>now() and o.ativo
+      and (o.administrador or o.funcao in ('noivo','noiva'))
+  ) then return false; end if;
+
+  if p_acao='criar' then
+    v_nome:=trim(coalesce(p_dados->>'nome',''));
+    v_descricao:=nullif(trim(coalesce(p_dados->>'descricao','')),'');
+    v_categoria_id:=nullif(p_dados->>'categoria_id','')::uuid;
+    v_preco_centavos:=(p_dados->>'preco_centavos')::integer;
+    v_quantidade_total:=(p_dados->>'quantidade_total')::integer;
+    v_permitir_duplicado:=coalesce(
+      (p_dados->>'permitir_duplicado')::boolean,
+      false
+    );
+    select coalesce(array_agg(value), '{}') into v_imagens
+    from jsonb_array_elements_text(coalesce(p_dados->'imagens','[]'::jsonb));
+
+    if length(v_nome) not between 2 and 150
+      or coalesce(length(v_descricao),0)>1000
+      or v_preco_centavos not between 0 and 100000000
+      or v_quantidade_total not between 1 and 10000
+      or cardinality(v_imagens)>10
+      or exists(
+        select 1 from unnest(v_imagens) imagem
+        where imagem !~* '^https?://'
+      )
+      or (
+        v_categoria_id is not null
+        and not exists(
+          select 1 from public.categorias_presentes
+          where id=v_categoria_id and ativo
+        )
+      )
+    then return false; end if;
+
+    v_nome_normalizado:=lower(
+      regexp_replace(trim(v_nome), '[[:space:]]+', ' ', 'g')
+    );
+    if not v_permitir_duplicado and exists (
+      select 1 from public.presentes p
+      where p.ativo
+        and lower(regexp_replace(trim(p.nome), '[[:space:]]+', ' ', 'g'))
+          = v_nome_normalizado
+    ) then return false; end if;
+
+    select coalesce(max(ordem),0)+1 into v_ordem from public.presentes;
+    insert into public.presentes(
+      nome,descricao,preco_centavos,quantidade_total,ordem,categoria_id,imagens
+    ) values(
+      v_nome,v_descricao,v_preco_centavos,v_quantidade_total,v_ordem,
+      v_categoria_id,v_imagens
+    );
+    return true;
+  elsif p_acao='excluir' then
+    v_id:=nullif(p_dados->>'id','')::uuid;
+    update public.presentes set ativo=false
+    where id=v_id and ativo;
+    return found;
+  end if;
+  return false;
+exception
+  when invalid_text_representation or numeric_value_out_of_range
+    or not_null_violation or check_violation or unique_violation
+  then return false;
+end $$;
+
+revoke all on function public.importar_presentes_automatico(text,jsonb)
+  from public;
+revoke all on function public.administrar_presente_dashboard(text,text,jsonb)
+  from public;
+grant execute on function public.importar_presentes_automatico(text,jsonb)
+  to anon,authenticated;
+grant execute on function public.administrar_presente_dashboard(text,text,jsonb)
+  to anon,authenticated;
+
+notify pgrst,'reload schema';
 commit;

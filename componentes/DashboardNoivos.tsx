@@ -40,9 +40,15 @@ type LinhaPresenteImportacao = {
   links_fotos: string[];
   descricao: string;
   quantidade: number;
+  permitir_duplicado?: boolean;
 };
 type DuplicidadeImportacao = {
   linha: LinhaImportacao;
+  encontrados: string[];
+  criar: boolean;
+};
+type DuplicidadePresenteImportacao = {
+  linha: LinhaPresenteImportacao;
   encontrados: string[];
   criar: boolean;
 };
@@ -197,12 +203,166 @@ function baixarCsv(
   a.click();
   URL.revokeObjectURL(a.href);
 }
+
+function baixarModeloImportacao(tipo: "convidados" | "presentes") {
+  const workbook = XLSX.utils.book_new();
+  if (tipo === "convidados") {
+    const dados = XLSX.utils.aoa_to_sheet([
+      ["Nome", "Grupo", "Função", "Origem"],
+    ]);
+    dados["!cols"] = [34, 28, 24, 20].map((wch) => ({ wch }));
+    const instrucoes = XLSX.utils.aoa_to_sheet([
+      ["Campo", "Obrigatório", "Como preencher"],
+      ["Nome", "Sim", "Nome completo do convidado"],
+      ["Grupo", "Não", "Nome de um grupo existente; vazio cria convite individual"],
+      ["Função", "Não", "Ex.: Padrinho, Madrinha, Pajem ou Convidado"],
+      ["Origem", "Não", "Use: noivo, noiva, ambos ou nao_classificado"],
+    ]);
+    instrucoes["!cols"] = [20, 14, 68].map((wch) => ({ wch }));
+    XLSX.utils.book_append_sheet(workbook, dados, "Convidados");
+    XLSX.utils.book_append_sheet(workbook, instrucoes, "Instruções");
+    XLSX.writeFile(workbook, "modelo-importacao-convidados.xlsx", {
+      compression: true,
+    });
+    return;
+  }
+
+  const dados = XLSX.utils.aoa_to_sheet([
+    [
+      "Nome",
+      "Categoria",
+      "Valor",
+      "Links de fotos",
+      "Descrição",
+      "Quantidade",
+    ],
+  ]);
+  dados["!cols"] = [34, 22, 14, 56, 52, 14].map((wch) => ({ wch }));
+  const instrucoes = XLSX.utils.aoa_to_sheet([
+    ["Campo", "Obrigatório", "Como preencher"],
+    ["Nome", "Sim", "Nome do presente"],
+    ["Categoria", "Sim", "Ex.: Cozinha, Sala, Quarto, Banheiro ou Viagem"],
+    ["Valor", "Sim", "Valor em reais, sem R$; exemplo: 299,90"],
+    ["Links de fotos", "Sim", "Coluna obrigatória; use URLs públicas separadas por ponto e vírgula"],
+    ["Descrição", "Não", "Texto exibido aos convidados"],
+    ["Quantidade", "Não", "Número inteiro; vazio será tratado como 1"],
+  ]);
+  instrucoes["!cols"] = [20, 14, 72].map((wch) => ({ wch }));
+  XLSX.utils.book_append_sheet(workbook, dados, "Presentes");
+  XLSX.utils.book_append_sheet(workbook, instrucoes, "Instruções");
+  XLSX.writeFile(workbook, "modelo-importacao-presentes.xlsx", {
+    compression: true,
+  });
+}
 const normalizar = (valor: string) =>
   valor
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
     .toLowerCase()
     .trim();
+
+function reaisParaCentavos(valor: string) {
+  const limpo = valor.trim().replace(/[^0-9,.-]/g, "");
+  const normalizado = limpo.includes(",")
+    ? limpo.replace(/\./g, "").replace(",", ".")
+    : limpo;
+  const numero = Number(normalizado);
+  if (!Number.isFinite(numero) || numero < 0 || numero > 1_000_000)
+    return null;
+  return Math.round(numero * 100);
+}
+
+function SeletorGrupo({
+  grupos,
+  valor,
+  onChange,
+  disabled = false,
+}: {
+  grupos: Grupo[];
+  valor: string;
+  onChange: (codigo: string) => void;
+  disabled?: boolean;
+}) {
+  const [aberto, setAberto] = useState(false);
+  const [termo, setTermo] = useState("");
+  const selecionado = grupos.find((grupo) => grupo.codigo === valor);
+  const filtrados = useMemo(() => {
+    const busca = normalizar(termo);
+    if (!busca) return grupos;
+    return grupos.filter((grupo) =>
+      normalizar(`${grupo.codigo} ${grupo.titulo}`).includes(busca),
+    );
+  }, [grupos, termo]);
+
+  return (
+    <div className="group-combobox">
+      <label htmlFor="seletor-grupo">Grupo do convidado</label>
+      <div className="group-combobox-control">
+        <input
+          id="seletor-grupo"
+          type="search"
+          role="combobox"
+          aria-expanded={aberto}
+          aria-controls="opcoes-grupo"
+          aria-autocomplete="list"
+          disabled={disabled}
+          value={aberto ? termo : selecionado ? `${selecionado.titulo} · ${selecionado.codigo}` : ""}
+          placeholder="Pesquise pelo nome ou código do grupo"
+          onFocus={() => {
+            setAberto(true);
+            setTermo("");
+          }}
+          onChange={(evento) => {
+            setAberto(true);
+            setTermo(evento.target.value);
+          }}
+          onBlur={() => window.setTimeout(() => setAberto(false), 120)}
+        />
+        {valor && !disabled && (
+          <button
+            type="button"
+            className="group-combobox-clear"
+            aria-label="Remover grupo selecionado"
+            onMouseDown={(evento) => evento.preventDefault()}
+            onClick={() => {
+              onChange("");
+              setTermo("");
+            }}
+          >
+            ×
+          </button>
+        )}
+      </div>
+      {aberto && !disabled && (
+        <div className="group-combobox-options" id="opcoes-grupo" role="listbox">
+          {filtrados.map((grupo) => (
+            <button
+              type="button"
+              role="option"
+              aria-selected={grupo.codigo === valor}
+              key={grupo.id}
+              onMouseDown={(evento) => evento.preventDefault()}
+              onClick={() => {
+                onChange(grupo.codigo);
+                setTermo("");
+                setAberto(false);
+              }}
+            >
+              <span>{grupo.titulo}</span>
+              <small>{grupo.codigo} · {grupo.total} {grupo.total === 1 ? "pessoa" : "pessoas"}</small>
+            </button>
+          ))}
+          {!filtrados.length && <p>Nenhum grupo encontrado por nome ou código.</p>}
+        </div>
+      )}
+      <small>
+        {valor
+          ? `Código selecionado: ${valor}`
+          : "Opcional. Sem grupo, será criado um convite individual."}
+      </small>
+    </div>
+  );
+}
 
 export function DashboardNoivos({
   dados: inicial,
@@ -215,7 +375,6 @@ export function DashboardNoivos({
     [pagina, setPagina] = useState<
       | "geral"
       | "convidados"
-      | "grupos"
       | "mensagens"
       | "notificacoes"
       | "presentes"
@@ -244,7 +403,13 @@ export function DashboardNoivos({
   const [duplicidades, setDuplicidades] = useState<DuplicidadeImportacao[]>([]),
     [importadosAntesDuplicidades, setImportadosAntesDuplicidades] = useState(0),
     [importando, setImportando] = useState(false);
+  const [duplicidadesPresentes, setDuplicidadesPresentes] = useState<
+      DuplicidadePresenteImportacao[]
+    >([]),
+    [importadosPresentesAntesDuplicidades, setImportadosPresentesAntesDuplicidades] =
+      useState(0);
   const [pesquisa, setPesquisa] = useState("");
+  const [pesquisaGrupos, setPesquisaGrupos] = useState("");
   const [grupoEditando, setGrupoEditando] = useState<Grupo | null>(null),
     [codigoGrupo, setCodigoGrupo] = useState(""),
     [tituloGrupo, setTituloGrupo] = useState(""),
@@ -266,7 +431,15 @@ export function DashboardNoivos({
   const [presentes, setPresentes] = useState<PresenteAdmin[]>([]),
     [presenteEditando, setPresenteEditando] = useState<string | null>(null),
     [urlsImagens, setUrlsImagens] = useState(""),
-    [carregandoPresentes, setCarregandoPresentes] = useState(false);
+    [carregandoPresentes, setCarregandoPresentes] = useState(false),
+    [formNovoPresente, setFormNovoPresente] = useState(false),
+    [novoPresenteNome, setNovoPresenteNome] = useState(""),
+    [novoPresenteDescricao, setNovoPresenteDescricao] = useState(""),
+    [novoPresenteCategoria, setNovoPresenteCategoria] = useState(""),
+    [novoPresenteValor, setNovoPresenteValor] = useState(""),
+    [novoPresenteQuantidade, setNovoPresenteQuantidade] = useState(1),
+    [novoPresenteImagens, setNovoPresenteImagens] = useState(""),
+    [salvandoPresente, setSalvandoPresente] = useState(false);
   const [categorias, setCategorias] = useState<Categoria[]>(
       inicial.categorias_presentes ?? [],
     ),
@@ -349,6 +522,13 @@ export function DashboardNoivos({
       ).includes(termo),
     );
   }, [dados.convidados, pesquisa]);
+  const gruposFiltrados = useMemo(() => {
+    const termo = normalizar(pesquisaGrupos);
+    if (!termo) return grupos;
+    return grupos.filter((item) =>
+      normalizar(`${item.codigo} ${item.titulo}`).includes(termo),
+    );
+  }, [grupos, pesquisaGrupos]);
   const lista =
     filtro === "sim"
       ? dados.convidados.filter((p) => p.resposta === "sim")
@@ -533,6 +713,125 @@ export function DashboardNoivos({
     await carregarPresentes();
     setAviso("Imagens do presente atualizadas com sucesso.");
   }
+  async function enviarAcaoPresente(
+    acao: "criar" | "excluir",
+    dadosAcao: Record<string, unknown>,
+  ) {
+    const r = await fetch("/api/convite", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        action: "administrar_presente",
+        codigo,
+        acao,
+        dados: dadosAcao,
+      }),
+    });
+    const d = await r.json();
+    if (!r.ok) {
+      setAviso(d.error || "Não foi possível atualizar a lista de presentes.");
+      return false;
+    }
+    return true;
+  }
+  async function criarPresente(e: FormEvent) {
+    e.preventDefault();
+    setAviso("");
+    const nomeLimpo = novoPresenteNome.trim();
+    const precoCentavos = reaisParaCentavos(novoPresenteValor);
+    const imagens = novoPresenteImagens
+      .split(/\r?\n/)
+      .map((url) => url.trim())
+      .filter(Boolean);
+    if (nomeLimpo.length < 2) {
+      setAviso("Informe um nome válido para o presente.");
+      return;
+    }
+    if (precoCentavos === null) {
+      setAviso("Informe um valor válido, como 299,90.");
+      return;
+    }
+    if (
+      !Number.isInteger(novoPresenteQuantidade) ||
+      novoPresenteQuantidade < 1 ||
+      novoPresenteQuantidade > 10000
+    ) {
+      setAviso("A quantidade deve ser um número inteiro entre 1 e 10.000.");
+      return;
+    }
+    if (
+      imagens.length > 10 ||
+      imagens.some((url) => !/^https?:\/\//i.test(url))
+    ) {
+      setAviso("Use até 10 links completos, iniciados por http:// ou https://.");
+      return;
+    }
+
+    const listaAtual = presentes.length ? presentes : await carregarPresentes();
+    const duplicado = listaAtual.find(
+      (presente) =>
+        normalizar(presente.nome).replace(/\s+/g, " ") ===
+        normalizar(nomeLimpo).replace(/\s+/g, " "),
+    );
+    const permitirDuplicado = Boolean(
+      duplicado &&
+        confirm(
+          `Já existe o presente “${duplicado?.nome}”. Deseja adicionar outro item com o mesmo nome?`,
+        ),
+    );
+    if (duplicado && !permitirDuplicado) return;
+
+    setSalvandoPresente(true);
+    try {
+      const ok = await enviarAcaoPresente("criar", {
+        nome: nomeLimpo,
+        descricao: novoPresenteDescricao.trim(),
+        categoria_id: novoPresenteCategoria || null,
+        preco_centavos: precoCentavos,
+        quantidade_total: novoPresenteQuantidade,
+        imagens,
+        permitir_duplicado: permitirDuplicado,
+      });
+      if (!ok) return;
+      setNovoPresenteNome("");
+      setNovoPresenteDescricao("");
+      setNovoPresenteCategoria("");
+      setNovoPresenteValor("");
+      setNovoPresenteQuantidade(1);
+      setNovoPresenteImagens("");
+      setFormNovoPresente(false);
+      await carregarPresentes();
+      setAviso("Presente adicionado com sucesso.");
+    } catch {
+      setAviso("Não foi possível adicionar o presente. Tente novamente.");
+    } finally {
+      setSalvandoPresente(false);
+    }
+  }
+  async function apagarPresente(presente: PresenteAdmin) {
+    if (
+      !confirm(
+        `Apagar “${presente.nome}” da lista? O histórico de presentes já assinados será preservado.`,
+      )
+    )
+      return;
+    setSalvandoPresente(true);
+    setAviso("");
+    try {
+      const ok = await enviarAcaoPresente("excluir", { id: presente.id });
+      if (!ok) return;
+      if (presenteEditando === presente.id) {
+        setPresenteEditando(null);
+        setUrlsImagens("");
+      }
+      await carregarPresentes();
+      setAviso("Presente apagado da lista. O histórico foi preservado.");
+    } catch {
+      setAviso("Não foi possível apagar o presente. Tente novamente.");
+    } finally {
+      setSalvandoPresente(false);
+    }
+  }
   async function acaoConfiguracao(
     acao: string,
     dadosAcao: Record<string, unknown>,
@@ -702,6 +1001,7 @@ export function DashboardNoivos({
       criancas_adicionais_limite: criancasExtras,
     });
     if (ok) {
+      setGrupo(codigoGrupo.trim().toUpperCase());
       setGrupoEditando(null);
       setCodigoGrupo("");
       setTituloGrupo("");
@@ -716,11 +1016,11 @@ export function DashboardNoivos({
       return;
     }
     const ok = await administrar(
-      assessoria ? "editar_restrito" : codigoDesejado ? (editando ? "editar_com_codigo" : "adicionar_com_codigo") : editando ? "editar" : "adicionar",
+      assessoria ? "editar_restrito" : editando ? (codigoDesejado ? "editar_com_codigo" : "editar") : "adicionar_com_codigo",
       {
         id: editando?.id,
         nome,
-        codigo: editando ? grupo : undefined,
+        codigo: grupo || undefined,
         funcao,
         origem,
         principal,
@@ -909,47 +1209,157 @@ export function DashboardNoivos({
     }
   }
 
+  async function enviarImportacaoPresentes(
+    linhas: LinhaPresenteImportacao[],
+  ) {
+    if (!linhas.length) return 0;
+    const resposta = await fetch("/api/convite", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        action: "importar_presentes",
+        codigo,
+        linhas,
+      }),
+    });
+    const resultado = await resposta.json();
+    if (!resposta.ok)
+      throw new Error(
+        resultado.error || "Não foi possível importar os presentes.",
+      );
+    return Number(resultado.importados) || 0;
+  }
+
   async function importarPresentes(file: File) {
     setImportando(true);
     try {
       setAviso("");
       const workbook = XLSX.read(await file.arrayBuffer(), { type: "array" });
       const folha = workbook.Sheets[workbook.SheetNames[0]];
-      const tabela = XLSX.utils.sheet_to_json<(string | number)[]>(folha, { header: 1, defval: "", raw: false });
-      if (tabela.length < 2) throw new Error("A planilha precisa ter cabeçalho e pelo menos um presente.");
-      const cab = tabela[0].map((v) => normalizar(String(v)).replace(/\s+/g, "_"));
-      const idx = (...nomes: string[]) => nomes.map((n) => cab.indexOf(n)).find((i) => i >= 0) ?? -1;
-      const nomeIdx = idx("nome"), categoriaIdx = idx("categoria"), valorIdx = idx("valor"), fotosIdx = idx("links_de_fotos", "links_fotos", "fotos");
+      const tabela = XLSX.utils.sheet_to_json<(string | number)[]>(folha, {
+        header: 1,
+        defval: "",
+        raw: false,
+      });
+      if (tabela.length < 2)
+        throw new Error(
+          "A planilha precisa ter cabeçalho e pelo menos um presente.",
+        );
+      const cab = tabela[0].map((v) =>
+        normalizar(String(v)).replace(/\s+/g, "_"),
+      );
+      const idx = (...nomes: string[]) =>
+        nomes.map((n) => cab.indexOf(n)).find((i) => i >= 0) ?? -1;
+      const nomeIdx = idx("nome"),
+        categoriaIdx = idx("categoria"),
+        valorIdx = idx("valor"),
+        fotosIdx = idx("links_de_fotos", "links_fotos", "fotos");
       const descricaoIdx = idx("descricao"), quantidadeIdx = idx("quantidade");
-      if ([nomeIdx, categoriaIdx, valorIdx, fotosIdx].some((i) => i < 0)) throw new Error('Use as colunas obrigatórias: "Nome", "Categoria", "Valor" e "Links de fotos".');
-      const linhas: LinhaPresenteImportacao[] = tabela.slice(1).map((r) => ({
-        nome: String(r[nomeIdx] ?? "").trim(),
-        categoria: String(r[categoriaIdx] ?? "").trim(),
-        valor: Number(String(r[valorIdx] ?? "0").replace(/[^0-9,.-]/g, "").replace(/\./g, "").replace(",", ".")),
-        links_fotos: String(r[fotosIdx] ?? "").split(/[\n;,]+/).map((v) => v.trim()).filter(Boolean),
-        descricao: descricaoIdx >= 0 ? String(r[descricaoIdx] ?? "").trim() : "",
-        quantidade: Math.max(1, Math.trunc(Number(quantidadeIdx >= 0 ? r[quantidadeIdx] : 1) || 1)),
-      })).filter((p) => p.nome.length >= 2 && p.valor >= 0);
+      if ([nomeIdx, categoriaIdx, valorIdx, fotosIdx].some((i) => i < 0))
+        throw new Error(
+          'Use as colunas obrigatórias: "Nome", "Categoria", "Valor" e "Links de fotos".',
+        );
+      const linhas: LinhaPresenteImportacao[] = tabela
+        .slice(1)
+        .map((r) => ({
+          nome: String(r[nomeIdx] ?? "").trim(),
+          categoria: String(r[categoriaIdx] ?? "").trim(),
+          valor: Number(
+            String(r[valorIdx] ?? "0")
+              .replace(/[^0-9,.-]/g, "")
+              .replace(/\./g, "")
+              .replace(",", "."),
+          ),
+          links_fotos: String(r[fotosIdx] ?? "")
+            .split(/[\n;,]+/)
+            .map((v) => v.trim())
+            .filter(Boolean),
+          descricao:
+            descricaoIdx >= 0 ? String(r[descricaoIdx] ?? "").trim() : "",
+          quantidade: Math.max(
+            1,
+            Math.trunc(
+              Number(quantidadeIdx >= 0 ? r[quantidadeIdx] : 1) || 1,
+            ),
+          ),
+        }))
+        .filter(
+          (p) =>
+            p.nome.length >= 2 &&
+            p.categoria.length >= 2 &&
+            Number.isFinite(p.valor) &&
+            p.valor >= 0,
+        );
       if (!linhas.length) throw new Error("Nenhum presente válido foi encontrado.");
       const listaAtual = presentes.length ? presentes : await carregarPresentes();
-      const existentes = new Set(listaAtual.map((p) => normalizar(p.nome)));
-      const vistos = new Set<string>();
-      const aprovados: LinhaPresenteImportacao[] = [];
+      const existentes = new Map<string, string[]>();
+      listaAtual.forEach((presente) => {
+        const chave = normalizar(presente.nome).replace(/\s+/g, " ");
+        existentes.set(chave, [
+          ...(existentes.get(chave) ?? []),
+          `${presente.nome} · ${presente.categoria || "Sem categoria"}`,
+        ]);
+      });
+      const vistos = new Map<string, string[]>();
+      const unicos: LinhaPresenteImportacao[] = [];
+      const repetidos: DuplicidadePresenteImportacao[] = [];
       for (const linha of linhas) {
-        const chave = normalizar(linha.nome);
-        if ((existentes.has(chave) || vistos.has(chave)) && !window.confirm(`O presente “${linha.nome}” já existe. Deseja criar outro item com o mesmo nome?`)) continue;
-        aprovados.push(linha);
-        vistos.add(chave);
+        const chave = normalizar(linha.nome).replace(/\s+/g, " ");
+        const iguais = [
+          ...(existentes.get(chave) ?? []),
+          ...(vistos.get(chave) ?? []),
+        ];
+        if (iguais.length)
+          repetidos.push({ linha, encontrados: iguais, criar: false });
+        else unicos.push(linha);
+        vistos.set(chave, [
+          ...(vistos.get(chave) ?? []),
+          `${linha.nome} · nesta planilha`,
+        ]);
       }
-      if (!aprovados.length) throw new Error("Nenhum novo presente foi selecionado para importação.");
-      const resposta = await fetch("/api/convite", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "importar_presentes", codigo, linhas: aprovados }) });
-      const resultado = await resposta.json();
-      if (!resposta.ok) throw new Error(resultado.error || "Não foi possível importar os presentes.");
-      await carregarPresentes();
-      setAviso(`${resultado.importados} presente(s) importado(s) com sucesso.`);
+      const importados = await enviarImportacaoPresentes(unicos);
+      if (importados) await carregarPresentes();
+      if (repetidos.length) {
+        setImportadosPresentesAntesDuplicidades(importados);
+        setDuplicidadesPresentes(repetidos);
+        setAviso("");
+      } else {
+        setAviso(
+          `${importados} ${importados === 1 ? "presente importado" : "presentes importados"} com sucesso.`,
+        );
+      }
     } catch (erro) {
       setAviso(erro instanceof Error ? erro.message : "Não foi possível importar os presentes.");
     } finally { setImportando(false); }
+  }
+
+  async function concluirDuplicidadesPresentes() {
+    setImportando(true);
+    try {
+      const escolhidos = duplicidadesPresentes
+        .filter((duplicidade) => duplicidade.criar)
+        .map((duplicidade) => ({
+          ...duplicidade.linha,
+          permitir_duplicado: true,
+        }));
+      const adicionais = await enviarImportacaoPresentes(escolhidos);
+      const total = importadosPresentesAntesDuplicidades + adicionais;
+      const ignorados = duplicidadesPresentes.length - escolhidos.length;
+      setDuplicidadesPresentes([]);
+      setImportadosPresentesAntesDuplicidades(0);
+      if (adicionais) await carregarPresentes();
+      setAviso(
+        `${total} ${total === 1 ? "presente importado" : "presentes importados"}. ${ignorados} ${ignorados === 1 ? "duplicidade foi ignorada" : "duplicidades foram ignoradas"}.`,
+      );
+    } catch (erro) {
+      setAviso(
+        erro instanceof Error
+          ? erro.message
+          : "Não foi possível concluir a importação.",
+      );
+    } finally {
+      setImportando(false);
+    }
   }
 
   if (pagina === "convidados")
@@ -969,6 +1379,7 @@ export function DashboardNoivos({
               onClick={() => {
                 setEditando(null);
                 setNome("");
+                setCodigoIndividual("");
                 setFuncao("");
                 setGrupo("");
                 setGestor(true);
@@ -1014,6 +1425,12 @@ export function DashboardNoivos({
               >
                 Baixar para Excel
               </button>
+              <button
+                className="secondary"
+                onClick={() => baixarModeloImportacao("convidados")}
+              >
+                Baixar modelo de importação
+              </button>
             </>
           )}
           {!assessoria && (
@@ -1030,6 +1447,61 @@ export function DashboardNoivos({
             </label>
           )}
         </div>
+        {!assessoria && (
+          <section className="guest-groups-section" aria-labelledby="grupos-convidados-title">
+            <div className="section-heading-row">
+              <div>
+                <p className="eyebrow">Organização dos convites</p>
+                <h2 id="grupos-convidados-title">Grupos de convidados</h2>
+                <p>Crie ou edite o grupo aqui e use-o imediatamente ao adicionar uma pessoa.</p>
+              </div>
+              <label className="group-list-search">
+                Pesquisar grupos
+                <input type="search" value={pesquisaGrupos} onChange={(evento) => setPesquisaGrupos(evento.target.value)} placeholder="Nome ou código" />
+              </label>
+            </div>
+            <form className="group-management-form" onSubmit={salvarGrupo}>
+              <label>
+                Código do grupo
+                <input placeholder="6 caracteres" value={codigoGrupo} onChange={(evento) => setCodigoGrupo(evento.target.value.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 6))} minLength={6} maxLength={6} required />
+              </label>
+              <label>
+                Nome do grupo
+                <input placeholder="Ex.: Família Silva" value={tituloGrupo} onChange={(evento) => setTituloGrupo(evento.target.value)} maxLength={100} required />
+              </label>
+              <label>
+                Crianças adicionais
+                <input type="number" min={0} max={20} value={criancasExtras} onChange={(evento) => setCriancasExtras(Number(evento.target.value))} />
+              </label>
+              <div className="group-form-actions">
+                <button className="primary">{grupoEditando ? "Salvar grupo" : "Criar grupo"}</button>
+                {grupoEditando && (
+                  <button type="button" className="secondary" onClick={() => { setGrupoEditando(null); setCodigoGrupo(""); setTituloGrupo(""); setCriancasExtras(0); }}>
+                    Cancelar
+                  </button>
+                )}
+              </div>
+            </form>
+            <div className="inline-group-list">
+              {gruposFiltrados.map((item) => (
+                <article key={item.id} className={grupo === item.codigo ? "selected" : ""}>
+                  <button type="button" className="group-summary" onClick={() => setGrupo(item.codigo)} aria-label={`Selecionar o grupo ${item.titulo}`}>
+                    <b>{item.titulo}</b>
+                    <small>{item.codigo} · {item.total} {item.total === 1 ? "pessoa" : "pessoas"}</small>
+                  </button>
+                  {item.protegido && dados.perfil === "noivos" ? (
+                    <small>Grupo protegido</small>
+                  ) : (
+                    <button type="button" className="secondary compact" onClick={() => { setGrupoEditando(item); setCodigoGrupo(item.codigo); setTituloGrupo(item.titulo); setCriancasExtras(item.criancas_adicionais_limite); }}>
+                      Editar
+                    </button>
+                  )}
+                </article>
+              ))}
+              {!gruposFiltrados.length && <div className="empty-state">Nenhum grupo encontrado.</div>}
+            </div>
+          </section>
+        )}
         {!assessoria && (
           <div className="admin-form guest-limit-form">
             <label>
@@ -1073,27 +1545,7 @@ export function DashboardNoivos({
                 <small>Use exatamente 6 letras ou números. A disponibilidade será confirmada ao salvar.</small>
               </label>
             )}
-            {editando ? (
-              <select
-                value={grupo}
-                onChange={(e) => setGrupo(e.target.value)}
-                required
-                disabled={assessoria}
-              >
-                <option value="">Selecione o grupo</option>
-                {grupos.map((g) => (
-                  <option key={g.id} value={g.codigo}>
-                    {g.titulo} · {g.codigo}
-                  </option>
-                ))}
-              </select>
-            ) : (
-              <p className="form-note">
-                Será criado um grupo individual com o mesmo código individual
-                desta pessoa. Depois, você poderá associá-la a outro grupo pela
-                edição.
-              </p>
-            )}
+            <SeletorGrupo grupos={grupos} valor={grupo} onChange={setGrupo} disabled={assessoria} />
             <select value={funcao} onChange={(e) => setFuncao(e.target.value)}>
               <option value="">Convidado</option>
               {FUNCOES.slice(1).map((f) => (
@@ -1719,103 +2171,6 @@ export function DashboardNoivos({
       </div>
     );
 
-  if (pagina === "grupos")
-    return (
-      <div className="panel admin-page">
-        <button className="back-link" onClick={() => setPagina("geral")}>
-          ← Voltar à visão geral
-        </button>
-        <p className="eyebrow">Área dos Noivos</p>
-        <h1>Grupos de convidados</h1>
-        <p>
-          Crie grupos como “Família de Jorge” ou “Amigos do IFBA”. Depois,
-          associe as pessoas ao grupo na lista de convidados.
-        </p>
-        <form className="admin-form group-form" onSubmit={salvarGrupo}>
-          <input
-            aria-label="Código do grupo"
-            placeholder="Código com 6 caracteres"
-            value={codigoGrupo}
-            onChange={(e) =>
-              setCodigoGrupo(
-                e.target.value
-                  .toUpperCase()
-                  .replace(/[^A-Z0-9]/g, "")
-                  .slice(0, 6),
-              )
-            }
-            minLength={6}
-            maxLength={6}
-            required
-          />
-          <input
-            aria-label="Título do grupo"
-            placeholder="Título do grupo"
-            value={tituloGrupo}
-            onChange={(e) => setTituloGrupo(e.target.value)}
-            maxLength={100}
-            required
-          />
-          <label>
-            Crianças adicionais permitidas{" "}
-            <input
-              type="number"
-              min={0}
-              max={20}
-              value={criancasExtras}
-              onChange={(e) => setCriancasExtras(Number(e.target.value))}
-            />
-          </label>
-          <button className="primary">
-            {grupoEditando ? "Salvar grupo" : "Criar grupo"}
-          </button>
-          {grupoEditando && (
-            <button
-              type="button"
-              className="secondary"
-              onClick={() => {
-                setGrupoEditando(null);
-                setCodigoGrupo("");
-                setTituloGrupo("");
-                setCriancasExtras(0);
-              }}
-            >
-              Cancelar
-            </button>
-          )}
-        </form>
-        {aviso && <p className="error">{aviso}</p>}
-        <div className="group-list">
-          {grupos.map((g) => (
-            <article key={g.id}>
-              <div>
-                <b>{g.titulo}</b>
-                <small>
-                  Código {g.codigo} · {g.total}{" "}
-                  {g.total === 1 ? "pessoa" : "pessoas"} · crianças adicionais:{" "}
-                  {g.criancas_adicionais_usadas}/{g.criancas_adicionais_limite}
-                </small>
-              </div>
-              {g.protegido && dados.perfil === "noivos" ? (
-                <small>Grupo protegido</small>
-              ) : (
-                <button
-                  onClick={() => {
-                    setGrupoEditando(g);
-                    setCodigoGrupo(g.codigo);
-                    setTituloGrupo(g.titulo);
-                    setCriancasExtras(g.criancas_adicionais_limite);
-                  }}
-                >
-                  Editar
-                </button>
-              )}
-            </article>
-          ))}
-        </div>
-      </div>
-    );
-
   if (pagina === "mensagens")
     return (
       <div className="panel admin-page">
@@ -2191,6 +2546,12 @@ export function DashboardNoivos({
         <div className="admin-actions">
           <button
             className="primary"
+            onClick={() => setFormNovoPresente((aberto) => !aberto)}
+          >
+            {formNovoPresente ? "Fechar cadastro" : "Adicionar presente"}
+          </button>
+          <button
+            className="secondary"
             disabled={carregandoPresentes}
             onClick={carregarPresentes}
           >
@@ -2218,13 +2579,126 @@ export function DashboardNoivos({
           >
             Baixar assinaturas para Excel
           </button>
+          <button
+            className="secondary"
+            onClick={() => baixarModeloImportacao("presentes")}
+          >
+            Baixar modelo de importação
+          </button>
           <label className="secondary file-button">
             {importando ? "Importando..." : "Importar lista de presentes"}
-            <input type="file" accept=".csv,.xlsx,.xls,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel" disabled={importando} onChange={(e) => e.target.files?.[0] && importarPresentes(e.target.files[0])}/>
+            <input
+              type="file"
+              accept=".csv,.xlsx,.xls,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
+              disabled={importando}
+              onChange={(e) => {
+                const arquivo = e.target.files?.[0];
+                if (arquivo) void importarPresentes(arquivo);
+                e.currentTarget.value = "";
+              }}
+            />
           </label>
         </div>
+        {formNovoPresente && (
+          <form className="gift-create-form" onSubmit={criarPresente}>
+            <div className="section-heading-row">
+              <div>
+                <p className="eyebrow">Cadastro manual</p>
+                <h2>Novo presente</h2>
+                <p>Preencha os dados para publicar o item imediatamente na lista.</p>
+              </div>
+            </div>
+            <div className="gift-create-grid">
+              <label>
+                Nome do presente
+                <input
+                  value={novoPresenteNome}
+                  onChange={(e) => setNovoPresenteNome(e.target.value)}
+                  maxLength={150}
+                  required
+                />
+              </label>
+              <label>
+                Categoria
+                <select
+                  value={novoPresenteCategoria}
+                  onChange={(e) => setNovoPresenteCategoria(e.target.value)}
+                >
+                  <option value="">Sem categoria</option>
+                  {categorias
+                    .filter((categoria) => categoria.ativo)
+                    .map((categoria) => (
+                      <option key={categoria.id} value={categoria.id}>
+                        {categoria.nome}
+                      </option>
+                    ))}
+                </select>
+              </label>
+              <label>
+                Valor em reais
+                <input
+                  inputMode="decimal"
+                  value={novoPresenteValor}
+                  onChange={(e) => setNovoPresenteValor(e.target.value)}
+                  placeholder="299,90"
+                  required
+                />
+              </label>
+              <label>
+                Quantidade
+                <input
+                  type="number"
+                  min={1}
+                  max={10000}
+                  value={novoPresenteQuantidade}
+                  onChange={(e) =>
+                    setNovoPresenteQuantidade(Number(e.target.value))
+                  }
+                  required
+                />
+              </label>
+              <label className="gift-create-description">
+                Descrição
+                <textarea
+                  rows={4}
+                  value={novoPresenteDescricao}
+                  onChange={(e) => setNovoPresenteDescricao(e.target.value)}
+                  maxLength={1000}
+                />
+              </label>
+              <label className="gift-create-images">
+                Links das imagens — uma URL por linha
+                <textarea
+                  rows={4}
+                  value={novoPresenteImagens}
+                  onChange={(e) => setNovoPresenteImagens(e.target.value)}
+                  placeholder="https://exemplo.com/imagem.jpg"
+                />
+                <small>Opcional. Use até 10 links públicos.</small>
+              </label>
+            </div>
+            <div className="gift-form-actions">
+              <button className="primary" disabled={salvandoPresente}>
+                {salvandoPresente ? "Salvando..." : "Adicionar à lista"}
+              </button>
+              <button
+                type="button"
+                className="secondary"
+                onClick={() => setFormNovoPresente(false)}
+              >
+                Cancelar
+              </button>
+            </div>
+          </form>
+        )}
         {aviso && (
-          <p className={aviso.includes("sucesso") ? "success-note" : "error"}>
+          <p
+            className={
+              /(sucesso|importad|adicionado|apagado|atualizad)/i.test(aviso)
+                ? "success-note"
+                : "error"
+            }
+          >
             {aviso}
           </p>
         )}
@@ -2253,9 +2727,14 @@ export function DashboardNoivos({
                 </div>
                 <div>
                   <b>{p.nome}</b>
+                  {p.descricao && <p>{p.descricao}</p>}
                   <small>
-                    {p.quantidade_assinada} de {p.quantidade_total} assinados ·{" "}
-                    {p.imagens?.length || 0} imagem(ns)
+                    {(p.preco_centavos / 100).toLocaleString("pt-BR", {
+                      style: "currency",
+                      currency: "BRL",
+                    })}{" "}
+                    · {p.quantidade_assinada} de {p.quantidade_total} assinados ·{" "}
+                    {p.quantidade_restante} disponíveis
                   </small>
                   <select
                     aria-label={`Categoria de ${p.nome}`}
@@ -2270,14 +2749,24 @@ export function DashboardNoivos({
                     ))}
                   </select>
                 </div>
-                <button
-                  onClick={() => {
-                    setPresenteEditando(p.id);
-                    setUrlsImagens((p.imagens ?? []).join("\n"));
-                  }}
-                >
-                  Editar imagens
-                </button>
+                <div className="gift-admin-actions">
+                  <button
+                    className="secondary"
+                    onClick={() => {
+                      setPresenteEditando(p.id);
+                      setUrlsImagens((p.imagens ?? []).join("\n"));
+                    }}
+                  >
+                    Editar imagens
+                  </button>
+                  <button
+                    className="danger-button"
+                    disabled={salvandoPresente}
+                    onClick={() => void apagarPresente(p)}
+                  >
+                    Apagar presente
+                  </button>
+                </div>
               </div>
               {presenteEditando === p.id && (
                 <div className="gift-image-editor">
@@ -2317,7 +2806,85 @@ export function DashboardNoivos({
               )}
             </article>
           ))}
+          {!carregandoPresentes && !presentes.length && (
+            <div className="empty-state">
+              Nenhum presente ativo. Adicione manualmente ou importe uma planilha.
+            </div>
+          )}
         </div>
+        {!!duplicidadesPresentes.length && (
+          <div className="modal-backdrop" role="presentation">
+            <section
+              className="duplicate-modal"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="duplicate-gift-title"
+            >
+              <p className="eyebrow">Revisão da importação</p>
+              <h2 id="duplicate-gift-title">Presentes com nomes idênticos</h2>
+              <p>
+                Os itens únicos já foram processados. Revise cada repetição e
+                escolha se ela representa outro presente ou o mesmo item.
+              </p>
+              <div className="duplicate-list">
+                {duplicidadesPresentes.map((duplicidade, indice) => (
+                  <article key={`${duplicidade.linha.nome}-${indice}`}>
+                    <div>
+                      <b>{duplicidade.linha.nome}</b>
+                      <small>
+                        Já encontrado: {duplicidade.encontrados.join("; ")}
+                      </small>
+                    </div>
+                    <fieldset>
+                      <legend>Esta linha é:</legend>
+                      <label>
+                        <input
+                          type="radio"
+                          name={`presente-duplicado-${indice}`}
+                          checked={!duplicidade.criar}
+                          onChange={() =>
+                            setDuplicidadesPresentes((atuais) =>
+                              atuais.map((item, posicao) =>
+                                posicao === indice
+                                  ? { ...item, criar: false }
+                                  : item,
+                              ),
+                            )
+                          }
+                        />{" "}
+                        O mesmo presente — não importar novamente
+                      </label>
+                      <label>
+                        <input
+                          type="radio"
+                          name={`presente-duplicado-${indice}`}
+                          checked={duplicidade.criar}
+                          onChange={() =>
+                            setDuplicidadesPresentes((atuais) =>
+                              atuais.map((item, posicao) =>
+                                posicao === indice
+                                  ? { ...item, criar: true }
+                                  : item,
+                              ),
+                            )
+                          }
+                        />{" "}
+                        Outro item com o mesmo nome — importar
+                      </label>
+                    </fieldset>
+                  </article>
+                ))}
+              </div>
+              <button
+                className="primary"
+                disabled={importando}
+                onClick={() => void concluirDuplicidadesPresentes()}
+              >
+                {importando ? "Concluindo..." : "Concluir importação"}
+              </button>
+            </section>
+          </div>
+        )}
         <h2>Presentes assinados</h2>
         <div className="signed-list">
           {dados.reservas.map((r) => (
@@ -2371,9 +2938,6 @@ export function DashboardNoivos({
         </button>
         {!assessoria && (
           <>
-            <button className="secondary" onClick={() => setPagina("grupos")}>
-              Gerenciar grupos
-            </button>
             <button
               className="secondary"
               onClick={() => setPagina("mensagens")}

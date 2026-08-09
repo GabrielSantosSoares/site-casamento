@@ -103,6 +103,7 @@ export async function POST(request: NextRequest) {
       links_fotos?:unknown[];
       descricao?:string;
       quantidade?:number;
+      permitir_duplicado?:boolean;
     }>;
     nome?:string;
     solicitante?:string;
@@ -304,6 +305,44 @@ export async function POST(request: NextRequest) {
     if(!response?.ok||(await response.json())!==true)return NextResponse.json({error:"Acesso não permitido ou presente inválido."},{status:403});
     return NextResponse.json({success:true});
   }
+  if(data.action==="administrar_presente"){
+    const token=request.cookies.get("sessao_noivos")?.value;
+    if(!token)return NextResponse.json({error:"Faça login novamente."},{status:401});
+    if(!data.acao||!data.dados)return NextResponse.json({error:"Dados incompletos."},{status:400});
+    let dadosPresente:Record<string,unknown>;
+    if(data.acao==="criar"){
+      const nome=String(data.dados.nome??"").trim().slice(0,150);
+      const descricao=String(data.dados.descricao??"").trim().slice(0,1000);
+      const categoriaId=data.dados.categoria_id?String(data.dados.categoria_id):null;
+      const precoCentavos=Number(data.dados.preco_centavos);
+      const quantidadeTotal=Number(data.dados.quantidade_total);
+      const imagensBrutas=Array.isArray(data.dados.imagens)?data.dados.imagens:[];
+      const imagens=imagensBrutas.map((url)=>String(url).trim().slice(0,1000)).filter(Boolean);
+      if(nome.length<2||!Number.isInteger(precoCentavos)||precoCentavos<0||precoCentavos>100000000
+        ||!Number.isInteger(quantidadeTotal)||quantidadeTotal<1||quantidadeTotal>10000
+        ||(categoriaId!==null&&!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(categoriaId))
+        ||imagens.length>10||imagens.some((url)=>!/^https?:\/\//i.test(url)))
+        return NextResponse.json({error:"Revise o nome, valor, quantidade, categoria e links das imagens."},{status:400});
+      dadosPresente={
+        nome,descricao,categoria_id:categoriaId,preco_centavos:precoCentavos,
+        quantidade_total:quantidadeTotal,imagens,
+        permitir_duplicado:data.dados.permitir_duplicado===true,
+      };
+    }else if(data.acao==="excluir"){
+      const id=String(data.dados.id??"");
+      if(!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id))
+        return NextResponse.json({error:"Presente inválido."},{status:400});
+      dadosPresente={id};
+    }else{
+      return NextResponse.json({error:"Ação inválida."},{status:400});
+    }
+    const response=await rpc("administrar_presente_dashboard",{
+      p_token_hash:tokenHash(token),p_acao:data.acao,p_dados:dadosPresente,
+    });
+    if(!response?.ok)return NextResponse.json({error:"Não foi possível atualizar a lista. Execute a migração mais recente no Supabase."},{status:502});
+    if((await response.json())!==true)return NextResponse.json({error:"Acesso não permitido, presente duplicado ou dados inválidos."},{status:403});
+    return NextResponse.json({success:true});
+  }
   if(data.action==="importar_convidados"){
     const token=request.cookies.get("sessao_noivos")?.value;
     if(!token)return NextResponse.json({error:"Faça login novamente."},{status:401});
@@ -334,10 +373,11 @@ export async function POST(request: NextRequest) {
       links_fotos:Array.isArray(item.links_fotos)?item.links_fotos.map((v:unknown)=>String(v).trim().slice(0,1000)).filter(Boolean).slice(0,10):[],
       descricao:String(item.descricao??"").trim().slice(0,1000),
       quantidade:Math.max(1,Math.min(10000,Math.trunc(Number(item.quantidade)||1))),
+      permitir_duplicado:item.permitir_duplicado===true,
     })).filter(item=>item.nome.length>=2&&Number.isFinite(item.valor)&&item.valor>=0&&item.links_fotos.every((url:string)=>/^https?:\/\//i.test(url)));
     if(!linhas.length)return NextResponse.json({error:"Nenhum presente válido foi encontrado."},{status:400});
     const response=await rpc("importar_presentes_automatico",{p_token_hash:tokenHash(token),p_linhas:linhas});
-    if(!response?.ok)return NextResponse.json({error:"Não foi possível importar. Execute a migração 025 no Supabase."},{status:502});
+    if(!response?.ok)return NextResponse.json({error:"Não foi possível importar. Execute a migração mais recente no Supabase."},{status:502});
     const importados=Number(await response.json());
     if(!Number.isInteger(importados)||importados<0)return NextResponse.json({error:"Sessão expirada, acesso não permitido ou planilha inválida."},{status:403});
     return NextResponse.json({success:true,importados});
