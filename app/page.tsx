@@ -21,6 +21,7 @@ type View =
   | "presentes"
   | "cortejo"
   | "noivos";
+type RetornoPagamento = "sucesso" | "pendente" | "falha" | null;
 type Guest = {
   id: string;
   nome: string;
@@ -125,6 +126,8 @@ export default function Home() {
   const [presentes, setPresentes] = useState<Presente[]>([]);
   const [carrinho, setCarrinho] = useState<Record<string, number>>({});
   const [presentesConfirmados, setPresentesConfirmados] = useState(false);
+  const [retornoPagamento, setRetornoPagamento] =
+    useState<RetornoPagamento>(null);
   const [mercadoPagoDisponivel, setMercadoPagoDisponivel] = useState(false),
     [historicoPresentes, setHistoricoPresentes] = useState<PresenteHistorico[]>(
       [],
@@ -180,6 +183,11 @@ export default function Home() {
         if (!response.ok)
           throw new Error(data.error || "Não foi possível acessar o convite.");
         const found = data.convite as Invitation;
+        const conviteUnitario =
+          Boolean(data.convite_unitario) || found.convidados.length === 1;
+        const codigoEfetivo = String(
+          data.codigo_individual_destino || found.codigo || codigoAcesso,
+        ).toUpperCase();
         if (found.perfil_acesso === "admin")
           throw new Error("Use a área administrativa em /x.");
         setInvitation(found);
@@ -203,14 +211,23 @@ export default function Home() {
         );
         setGuest(true);
         if (found.perfil_acesso === "convidado")
-          void carregarHistoricoPorCodigo(codigoAcesso);
+          void carregarHistoricoPorCodigo(codigoEfetivo);
         const acessoPeloGrupo =
+          !conviteUnitario &&
           found.codigo.toUpperCase() === found.codigo_conjunto.toUpperCase();
-        const somenteLeitura = somenteGrupo || acessoPeloGrupo;
+        const somenteLeitura =
+          !conviteUnitario && (somenteGrupo || acessoPeloGrupo);
         setGrupoSomenteLeitura(somenteLeitura);
+        if (conviteUnitario && window.location.pathname.startsWith("/g/")) {
+          window.history.replaceState(
+            {},
+            "",
+            `/c/${codigoEfetivo}${window.location.search}`,
+          );
+        }
         setQrConvite(
           await QRCode.toDataURL(
-            `${window.location.origin}/${somenteLeitura ? "g" : "c"}/${codigoAcesso}`,
+            `${window.location.origin}/${somenteLeitura ? "g" : "c"}/${somenteLeitura ? codigoAcesso : codigoEfetivo}`,
             {
               width: 280,
               margin: 1,
@@ -224,13 +241,33 @@ export default function Home() {
         const temPresencaConfirmada = found.convidados.some(
           (person) => person.status === "sim",
         );
-        setView(
-          organizacao
-            ? "noivos"
-            : temPresencaConfirmada
-              ? "inicio"
-              : "convite",
-        );
+        const retorno = new URLSearchParams(window.location.search).get(
+          "pagamento",
+        ) as RetornoPagamento;
+        if (["sucesso", "pendente", "falha"].includes(retorno ?? "")) {
+          setRetornoPagamento(retorno);
+          setPresentesConfirmados(retorno === "sucesso");
+          setCarrinho({});
+          setView("presentes");
+          window.history.replaceState({}, "", `/c/${codigoEfetivo}`);
+          window.setTimeout(
+            () => void carregarHistoricoPorCodigo(codigoEfetivo),
+            2500,
+          );
+          window.setTimeout(
+            () => void carregarHistoricoPorCodigo(codigoEfetivo),
+            7000,
+          );
+        } else {
+          setRetornoPagamento(null);
+          setView(
+            organizacao
+              ? "noivos"
+              : temPresencaConfirmada
+                ? "inicio"
+                : "convite",
+          );
+        }
       } catch (error) {
         setNotice(
           error instanceof Error
@@ -560,6 +597,7 @@ export default function Home() {
     setCode("");
     setSenha("");
     setConfirmarSenha("");
+    setRetornoPagamento(null);
     setNotice("");
     setView("inicio");
     window.history.replaceState({}, "", "/");
@@ -1198,6 +1236,27 @@ export default function Home() {
           )}
           {view === "presentes" && (
             <>
+              {retornoPagamento && (
+                <div
+                  className={`payment-return-banner ${retornoPagamento}`}
+                  role="status"
+                >
+                  <b>
+                    {retornoPagamento === "sucesso"
+                      ? "Pagamento enviado"
+                      : retornoPagamento === "pendente"
+                        ? "Pagamento em processamento"
+                        : "Pagamento não concluído"}
+                  </b>
+                  <span>
+                    {retornoPagamento === "sucesso"
+                      ? "Você continua no seu convite. O histórico será atualizado assim que o Mercado Pago concluir a confirmação."
+                      : retornoPagamento === "pendente"
+                        ? "Você continua no seu convite. Acompanhe a confirmação no histórico abaixo."
+                        : "Você continua no seu convite e pode tentar novamente pelo seu histórico de presentes."}
+                  </span>
+                </div>
+              )}
               <ListaPresentes
                 presentes={presentes}
                 carrinho={carrinho}

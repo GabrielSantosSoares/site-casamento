@@ -119,6 +119,27 @@ async function mercadoPagoDisponivel(){
   const r=await fetch(`${supabaseUrl}/rest/v1/integracoes_pagamento?id=eq.1&ativa=eq.true&select=id`,{headers:{apikey:supabaseSecretKey,Authorization:`Bearer ${supabaseSecretKey}`},cache:"no-store"});
   return r.ok&&((await r.json()) as unknown[]).length>0;
 }
+async function resolverConviteUnitario(codigoAcesso:string){
+  if(!supabaseUrl||!supabaseSecretKey)return null;
+  const codigo=codigoAcesso.trim().toUpperCase();
+  const h={apikey:supabaseSecretKey,Authorization:`Bearer ${supabaseSecretKey}`};
+  const conviteResponse=await fetch(
+    `${supabaseUrl}/rest/v1/convites?codigo=eq.${encodeURIComponent(codigo)}&ativo=eq.true&select=id&limit=1`,
+    {headers:h,cache:"no-store"},
+  ).catch(()=>null);
+  if(!conviteResponse?.ok)return null;
+  const convite=(await conviteResponse.json() as Array<{id:string}>)[0];
+  if(!convite?.id)return null;
+  const convidadosResponse=await fetch(
+    `${supabaseUrl}/rest/v1/convidados?convite_id=eq.${encodeURIComponent(convite.id)}&select=codigo_individual&order=ordem.asc&limit=2`,
+    {headers:h,cache:"no-store"},
+  ).catch(()=>null);
+  if(!convidadosResponse?.ok)return null;
+  const convidados=await convidadosResponse.json() as Array<{codigo_individual?:string}>;
+  const codigoIndividual=String(convidados[0]?.codigo_individual??"").trim().toUpperCase();
+  return convidados.length===1&&/^[A-Z0-9]{6}$/.test(codigoIndividual)
+    ?codigoIndividual:null;
+}
 const tokenHash=(token:string)=>createHash("sha256").update(token).digest("hex");
 async function criarHashSenha(senha:string){
   const salt = new Uint8Array(randomBytes(16));
@@ -247,7 +268,7 @@ export async function POST(request: NextRequest) {
     const token=request.cookies.get("sessao_noivos")?.value;
     if(token)await rpcAdmin("encerrar_sessao_organizacao_backend",{p_token_hash:tokenHash(token)}).catch(()=>null);
     const response=NextResponse.json({success:true});
-    response.cookies.set("sessao_noivos","",{httpOnly:true,secure:true,sameSite:"strict",path:"/",maxAge:0});
+    response.cookies.set("sessao_noivos","",{httpOnly:true,secure:true,sameSite:"lax",path:"/",maxAge:0});
     return response;
   }
   const codigo = data.codigo?.trim().toUpperCase();
@@ -297,26 +318,34 @@ export async function POST(request: NextRequest) {
     const response=await rpcAdmin("criar_sessao_organizacao_backend",{p_identificador:identificador,p_token_hash:tokenHash(token)});
     if(!response?.ok||(await response.json())!==true)return NextResponse.json({error:"Não foi possível iniciar a sessão."},{status:401});
     const result=NextResponse.json({success:true,exige_troca_senha:acesso.exige_troca_senha});
-    result.cookies.set("sessao_noivos",token,{httpOnly:true,secure:true,sameSite:"strict",path:"/",maxAge:604800});
+    result.cookies.set("sessao_noivos",token,{httpOnly:true,secure:true,sameSite:"lax",path:"/",maxAge:604800});
     return result;
   }
 
   if (data.action === "buscar") {
-    const response = await rpc("buscar_convite", { p_codigo: codigo });
+    const codigoIndividualUnitario=await resolverConviteUnitario(codigo as string);
+    const codigoEfetivo=codigoIndividualUnitario??codigo;
+    const response = await rpc("buscar_convite", { p_codigo: codigoEfetivo });
     if (!response) return NextResponse.json({ error: "Supabase não configurado." }, { status: 503 });
     if (!response.ok) return NextResponse.json({ error: "Não foi possível consultar o convite." }, { status: 502 });
     const conviteBruto = await response.json() as ConviteRpc | null;
     if (!conviteBruto) return NextResponse.json({ error: "Código não encontrado." }, { status: 404 });
     const conviteCompleto = await enriquecerFuncoesDoGrupo(
       conviteBruto,
-      codigo as string,
+      codigoEfetivo as string,
     );
     const convite = sanitizarFuncoesDoConvite(
       conviteCompleto,
-      codigo as string,
+      codigoEfetivo as string,
     );
     const giftsResponse=await rpc("listar_presentes",{});
-    return NextResponse.json({convite,presentes:giftsResponse?.ok?await giftsResponse.json():[],mercado_pago_disponivel:await mercadoPagoDisponivel()});
+    return NextResponse.json({
+      convite,
+      presentes:giftsResponse?.ok?await giftsResponse.json():[],
+      mercado_pago_disponivel:await mercadoPagoDisponivel(),
+      convite_unitario:Boolean(codigoIndividualUnitario),
+      codigo_individual_destino:codigoIndividualUnitario,
+    });
   }
   if(data.action==="confirmar_presentes"){
     if(!Array.isArray(data.itens)||data.itens.length===0)return NextResponse.json({error:"O carrinho está vazio."},{status:400});
@@ -357,7 +386,7 @@ export async function POST(request: NextRequest) {
     const token=randomBytes(32).toString("base64url");
     const response=await rpcAdmin("criar_sessao_backend",{p_codigo:codigo,p_token_hash:tokenHash(token)});
     if(!response?.ok||(await response.json())!==true)return NextResponse.json({error:"Senha incorreta."},{status:401});
-    const result=NextResponse.json({success:true});result.cookies.set("sessao_noivos",token,{httpOnly:true,secure:true,sameSite:"strict",path:"/",maxAge:604800});return result;
+    const result=NextResponse.json({success:true});result.cookies.set("sessao_noivos",token,{httpOnly:true,secure:true,sameSite:"lax",path:"/",maxAge:604800});return result;
   }
   if(data.action==="dashboard"){
     const token=request.cookies.get("sessao_noivos")?.value;if(!token)return NextResponse.json({error:"Faça login novamente."},{status:401});
