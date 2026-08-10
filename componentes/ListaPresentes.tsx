@@ -8,9 +8,10 @@ export type Presente = {
   categoria_id?: string | null;
   categoria?: string | null;
   preco_centavos: number;
-  quantidade_total: number;
+  quantidade_total: number | null;
   quantidade_assinada: number;
-  quantidade_restante: number;
+  quantidade_restante: number | null;
+  quantidade_ilimitada?: boolean;
 };
 export type PresenteHistorico = {
   id: string;
@@ -29,6 +30,8 @@ export type PresenteHistorico = {
   conciliacao_pagamento_ate?: string | null;
   tipo_pagamento?: string | null;
   boleto_vencimento?: string | null;
+  status_entrega?: "Assinado" | "Entregue" | null;
+  entregue_em?: string | null;
 };
 type ResultadoPagamento = {
   requer_cpf?: boolean;
@@ -141,7 +144,9 @@ export function ListaPresentes({
       )}
       <div className="gift-grid">
         {presentes.map((p) => {
-          const esgotado = p.quantidade_restante <= 0,
+          const ilimitado = p.quantidade_ilimitada || p.quantidade_total === null,
+            restante = p.quantidade_restante ?? 0,
+            esgotado = !ilimitado && restante <= 0,
             q = carrinho[p.id] ?? 0,
             imagens = (p.imagens ?? []).filter(Boolean);
           return (
@@ -167,7 +172,8 @@ export function ListaPresentes({
                   <strong>{p.quantidade_assinada}</strong> assinados
                 </span>
                 <span>
-                  <strong>{p.quantidade_restante}</strong> restantes
+                  <strong>{ilimitado ? "∞" : restante}</strong>{" "}
+                  {ilimitado ? "sem limite" : "restantes"}
                 </span>
               </div>
               {esgotado ? (
@@ -183,9 +189,9 @@ export function ListaPresentes({
                   <output>{q}</output>
                   <button
                     onClick={() =>
-                      aoAlterar(p.id, Math.min(p.quantidade_restante, q + 1))
+                      aoAlterar(p.id, Math.min(ilimitado ? 20 : restante, q + 1))
                     }
-                    disabled={q >= p.quantidade_restante}
+                    disabled={q >= (ilimitado ? 20 : restante)}
                   >
                     +
                   </button>
@@ -205,7 +211,10 @@ export function ListaPresentes({
                 <div>
                   <b>{p.nome}</b>
                   <small>
-                    {p.quantidade_assinada} de {p.quantidade_total} assinados
+                    {p.quantidade_assinada}{" "}
+                    {p.quantidade_total === null
+                      ? "assinados · sem limite"
+                      : `de ${p.quantidade_total} assinados`}
                   </small>
                 </div>
                 <strong>{p.quantidade_assinada}</strong>
@@ -232,8 +241,12 @@ export function ListaPresentes({
                       ? "Presente físico"
                       : "Mercado Pago"}{" "}
                     ·{" "}
-                    {item.status === "confirmado"
-                      ? "Confirmado"
+                    {item.meio === "fisico" && item.status === "confirmado"
+                      ? item.status_entrega === "Entregue"
+                        ? `Entregue${item.entregue_em ? ` · ${new Date(item.entregue_em).toLocaleDateString("pt-BR")}` : ""}`
+                        : "Assinado"
+                      : item.status === "confirmado"
+                      ? "Pagamento aprovado"
                       : item.status === "cancelado"
                         ? "Compra cancelada"
                         : item.status === "reembolsado"
@@ -341,10 +354,12 @@ export function ListaPresentes({
                   className="payment-option mercado-pago"
                   onClick={() => void escolherMercadoPago()}
                 >
-                  <b>Pagar com Mercado Pago</b>
+                  <b>Doar o valor pelo Mercado Pago</b>
                   <span>
-                    Você será levado ao Checkout Pro. Após a aprovação, o
-                    presente ficará definitivo.
+                    O item não será comprado pelo Mercado Pago. Você fará uma
+                    doação aos noivos no valor correspondente ao presente
+                    selecionado. Depois, será levado ao Checkout Pro e, após a
+                    aprovação, a contribuição ficará registrada.
                   </span>
                 </button>
               )}

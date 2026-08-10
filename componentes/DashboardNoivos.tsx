@@ -39,7 +39,7 @@ type LinhaPresenteImportacao = {
   valor: number;
   links_fotos: string[];
   descricao: string;
-  quantidade: number;
+  quantidade: number | null;
   permitir_duplicado?: boolean;
 };
 type DuplicidadeImportacao = {
@@ -58,6 +58,10 @@ type Reserva = {
   codigo: string;
   presente: string;
   quantidade: number;
+  meio: "fisico" | "mercado_pago";
+  status_entrega: "Assinado" | "Entregue" | "Pago";
+  entregue_em: string | null;
+  entregue_por_nome: string | null;
   criado_em: string;
 };
 type Grupo = {
@@ -100,9 +104,10 @@ type PresenteAdmin = {
   categoria_id: string | null;
   categoria: string | null;
   preco_centavos: number;
-  quantidade_total: number;
+  quantidade_total: number | null;
   quantidade_assinada: number;
-  quantidade_restante: number;
+  quantidade_restante: number | null;
+  quantidade_ilimitada?: boolean;
 };
 type Evento = {
   data: string;
@@ -135,6 +140,7 @@ type PagamentoAdmin = {
   reembolso_id: string | null;
   reembolsado_em: string | null;
   convite_codigo: string | null;
+  codigo_presenteador: string | null;
   itens: Array<{ nome: string; quantidade: number }>;
 };
 const FUNCOES = [
@@ -245,7 +251,7 @@ function baixarModeloImportacao(tipo: "convidados" | "presentes") {
     ["Valor", "Sim", "Valor em reais, sem R$; exemplo: 299,90"],
     ["Links de fotos", "Sim", "Coluna obrigatória; use URLs públicas separadas por ponto e vírgula"],
     ["Descrição", "Não", "Texto exibido aos convidados"],
-    ["Quantidade", "Não", "Número inteiro; vazio será tratado como 1"],
+    ["Quantidade", "Não", "Número inteiro; deixe vazio para não limitar o número de assinaturas"],
   ]);
   instrucoes["!cols"] = [20, 14, 72].map((wch) => ({ wch }));
   XLSX.utils.book_append_sheet(workbook, dados, "Presentes");
@@ -430,14 +436,19 @@ export function DashboardNoivos({
     [confirmaNovaSenha, setConfirmaNovaSenha] = useState("");
   const [presentes, setPresentes] = useState<PresenteAdmin[]>([]),
     [presenteEditando, setPresenteEditando] = useState<string | null>(null),
-    [urlsImagens, setUrlsImagens] = useState(""),
+    [edicaoPresenteNome, setEdicaoPresenteNome] = useState(""),
+    [edicaoPresenteDescricao, setEdicaoPresenteDescricao] = useState(""),
+    [edicaoPresenteCategoria, setEdicaoPresenteCategoria] = useState(""),
+    [edicaoPresenteValor, setEdicaoPresenteValor] = useState(""),
+    [edicaoPresenteQuantidade, setEdicaoPresenteQuantidade] = useState(""),
+    [edicaoPresenteImagens, setEdicaoPresenteImagens] = useState(""),
     [carregandoPresentes, setCarregandoPresentes] = useState(false),
     [formNovoPresente, setFormNovoPresente] = useState(false),
     [novoPresenteNome, setNovoPresenteNome] = useState(""),
     [novoPresenteDescricao, setNovoPresenteDescricao] = useState(""),
     [novoPresenteCategoria, setNovoPresenteCategoria] = useState(""),
     [novoPresenteValor, setNovoPresenteValor] = useState(""),
-    [novoPresenteQuantidade, setNovoPresenteQuantidade] = useState(1),
+    [novoPresenteQuantidade, setNovoPresenteQuantidade] = useState(""),
     [novoPresenteImagens, setNovoPresenteImagens] = useState(""),
     [salvandoPresente, setSalvandoPresente] = useState(false);
   const [categorias, setCategorias] = useState<Categoria[]>(
@@ -688,33 +699,33 @@ export function DashboardNoivos({
     setPresentes(lista);
     return lista;
   }
-  async function salvarImagensPresente(presente_id: string) {
-    const imagens = urlsImagens
-      .split(/\r?\n/)
-      .map((v) => v.trim())
-      .filter(Boolean);
+  function abrirEdicaoPresente(presente: PresenteAdmin) {
+    setPresenteEditando(presente.id);
+    setEdicaoPresenteNome(presente.nome);
+    setEdicaoPresenteDescricao(presente.descricao ?? "");
+    setEdicaoPresenteCategoria(presente.categoria_id ?? "");
+    setEdicaoPresenteValor(
+      (presente.preco_centavos / 100).toFixed(2).replace(".", ","),
+    );
+    setEdicaoPresenteQuantidade(
+      presente.quantidade_total === null
+        ? ""
+        : String(presente.quantidade_total),
+    );
+    setEdicaoPresenteImagens((presente.imagens ?? []).join("\n"));
     setAviso("");
-    const r = await fetch("/api/convite", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        action: "administrar_imagens_presente",
-        codigo,
-        dados: { presente_id, imagens },
-      }),
-    });
-    const d = await r.json();
-    if (!r.ok) {
-      setAviso(d.error || "Não foi possível salvar as imagens.");
-      return;
-    }
+  }
+  function fecharEdicaoPresente() {
     setPresenteEditando(null);
-    setUrlsImagens("");
-    await carregarPresentes();
-    setAviso("Imagens do presente atualizadas com sucesso.");
+    setEdicaoPresenteNome("");
+    setEdicaoPresenteDescricao("");
+    setEdicaoPresenteCategoria("");
+    setEdicaoPresenteValor("");
+    setEdicaoPresenteQuantidade("");
+    setEdicaoPresenteImagens("");
   }
   async function enviarAcaoPresente(
-    acao: "criar" | "excluir",
+    acao: "criar" | "editar" | "excluir",
     dadosAcao: Record<string, unknown>,
   ) {
     const r = await fetch("/api/convite", {
@@ -734,11 +745,96 @@ export function DashboardNoivos({
     }
     return true;
   }
+  async function salvarEdicaoPresente(
+    e: FormEvent,
+    presente: PresenteAdmin,
+  ) {
+    e.preventDefault();
+    setAviso("");
+    const nomeLimpo = edicaoPresenteNome.trim();
+    const precoCentavos = reaisParaCentavos(edicaoPresenteValor);
+    const quantidadeTexto = edicaoPresenteQuantidade.trim();
+    const quantidadeTotal = quantidadeTexto === "" ? null : Number(quantidadeTexto);
+    const imagens = edicaoPresenteImagens
+      .split(/\r?\n/)
+      .map((url) => url.trim())
+      .filter(Boolean);
+    if (nomeLimpo.length < 2) {
+      setAviso("Informe um nome válido para o presente.");
+      return;
+    }
+    if (precoCentavos === null) {
+      setAviso("Informe um valor válido, como 299,90.");
+      return;
+    }
+    if (
+      quantidadeTotal !== null &&
+      (!Number.isInteger(quantidadeTotal) ||
+        quantidadeTotal < 1 ||
+        quantidadeTotal > 10000)
+    ) {
+      setAviso("Informe de 1 a 10.000 ou deixe a quantidade vazia para não limitar.");
+      return;
+    }
+    if (
+      quantidadeTotal !== null &&
+      quantidadeTotal < presente.quantidade_assinada
+    ) {
+      setAviso(
+        `A quantidade não pode ser menor que as ${presente.quantidade_assinada} unidades já assinadas ou reservadas.`,
+      );
+      return;
+    }
+    if (
+      imagens.length > 10 ||
+      imagens.some((url) => !/^https?:\/\//i.test(url))
+    ) {
+      setAviso("Use até 10 links completos, iniciados por http:// ou https://.");
+      return;
+    }
+    const duplicado = presentes.find(
+      (item) =>
+        item.id !== presente.id &&
+        normalizar(item.nome).replace(/\s+/g, " ") ===
+          normalizar(nomeLimpo).replace(/\s+/g, " "),
+    );
+    const permitirDuplicado = Boolean(
+      duplicado &&
+        confirm(
+          `Já existe o presente “${duplicado.nome}”. Deseja manter dois itens com o mesmo nome?`,
+        ),
+    );
+    if (duplicado && !permitirDuplicado) return;
+
+    setSalvandoPresente(true);
+    try {
+      const ok = await enviarAcaoPresente("editar", {
+        id: presente.id,
+        nome: nomeLimpo,
+        descricao: edicaoPresenteDescricao.trim(),
+        categoria_id: edicaoPresenteCategoria || null,
+        preco_centavos: precoCentavos,
+        quantidade_total: quantidadeTotal,
+        imagens,
+        permitir_duplicado: permitirDuplicado,
+      });
+      if (!ok) return;
+      fecharEdicaoPresente();
+      await carregarPresentes();
+      setAviso("Presente atualizado com sucesso.");
+    } catch {
+      setAviso("Não foi possível editar o presente. Tente novamente.");
+    } finally {
+      setSalvandoPresente(false);
+    }
+  }
   async function criarPresente(e: FormEvent) {
     e.preventDefault();
     setAviso("");
     const nomeLimpo = novoPresenteNome.trim();
     const precoCentavos = reaisParaCentavos(novoPresenteValor);
+    const quantidadeTexto = novoPresenteQuantidade.trim();
+    const quantidadeTotal = quantidadeTexto === "" ? null : Number(quantidadeTexto);
     const imagens = novoPresenteImagens
       .split(/\r?\n/)
       .map((url) => url.trim())
@@ -752,11 +848,12 @@ export function DashboardNoivos({
       return;
     }
     if (
-      !Number.isInteger(novoPresenteQuantidade) ||
-      novoPresenteQuantidade < 1 ||
-      novoPresenteQuantidade > 10000
+      quantidadeTotal !== null &&
+      (!Number.isInteger(quantidadeTotal) ||
+        quantidadeTotal < 1 ||
+        quantidadeTotal > 10000)
     ) {
-      setAviso("A quantidade deve ser um número inteiro entre 1 e 10.000.");
+      setAviso("Informe de 1 a 10.000 ou deixe a quantidade vazia para não limitar.");
       return;
     }
     if (
@@ -788,7 +885,7 @@ export function DashboardNoivos({
         descricao: novoPresenteDescricao.trim(),
         categoria_id: novoPresenteCategoria || null,
         preco_centavos: precoCentavos,
-        quantidade_total: novoPresenteQuantidade,
+        quantidade_total: quantidadeTotal,
         imagens,
         permitir_duplicado: permitirDuplicado,
       });
@@ -797,7 +894,7 @@ export function DashboardNoivos({
       setNovoPresenteDescricao("");
       setNovoPresenteCategoria("");
       setNovoPresenteValor("");
-      setNovoPresenteQuantidade(1);
+      setNovoPresenteQuantidade("");
       setNovoPresenteImagens("");
       setFormNovoPresente(false);
       await carregarPresentes();
@@ -821,8 +918,7 @@ export function DashboardNoivos({
       const ok = await enviarAcaoPresente("excluir", { id: presente.id });
       if (!ok) return;
       if (presenteEditando === presente.id) {
-        setPresenteEditando(null);
-        setUrlsImagens("");
+        fecharEdicaoPresente();
       }
       await carregarPresentes();
       setAviso("Presente apagado da lista. O histórico foi preservado.");
@@ -831,6 +927,34 @@ export function DashboardNoivos({
     } finally {
       setSalvandoPresente(false);
     }
+  }
+  async function alterarEntregaPresente(
+    reserva: Reserva,
+    entregue: boolean,
+  ) {
+    const acao = entregue ? "marcar como entregue" : "voltar para assinado";
+    if (!confirm(`Deseja ${acao} o presente “${reserva.presente}”?`)) return;
+    setAviso("");
+    const resposta = await fetch("/api/convite", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        action: "administrar_entrega_presente",
+        codigo,
+        dados: { reserva_id: reserva.id, entregue },
+      }),
+    });
+    const resultado = await resposta.json();
+    if (!resposta.ok) {
+      setAviso(resultado.error || "Não foi possível atualizar a entrega.");
+      return;
+    }
+    await recarregar();
+    setAviso(
+      entregue
+        ? "Entrega confirmada com sucesso."
+        : "O presente voltou ao status Assinado.",
+    );
   }
   async function acaoConfiguracao(
     acao: string,
@@ -1276,12 +1400,16 @@ export function DashboardNoivos({
             .filter(Boolean),
           descricao:
             descricaoIdx >= 0 ? String(r[descricaoIdx] ?? "").trim() : "",
-          quantidade: Math.max(
-            1,
-            Math.trunc(
-              Number(quantidadeIdx >= 0 ? r[quantidadeIdx] : 1) || 1,
-            ),
-          ),
+          quantidade:
+            quantidadeIdx < 0 || String(r[quantidadeIdx] ?? "").trim() === ""
+              ? null
+              : Math.max(
+                  1,
+                  Math.min(
+                    10000,
+                    Math.trunc(Number(r[quantidadeIdx]) || 1),
+                  ),
+                ),
         }))
         .filter(
           (p) =>
@@ -1887,8 +2015,9 @@ export function DashboardNoivos({
                 <article className="payment-row" key={p.id}>
                   <span>
                     <b>{p.pagador_nome}</b>
+                    {p.pagador_email && <small>{p.pagador_email}</small>}
                     <small>
-                      {p.pagador_email || `Convite ${p.convite_codigo || "—"}`}
+                      Código: {p.codigo_presenteador || p.convite_codigo || "—"}
                     </small>
                     {p.valor != null && (
                       <strong>
@@ -2566,13 +2695,25 @@ export function DashboardNoivos({
             onClick={() =>
               baixarCsv(
                 "presentes-assinados.csv",
-                ["convidado", "codigo", "presente", "quantidade", "data"],
+                [
+                  "convidado",
+                  "codigo",
+                  "presente",
+                  "quantidade",
+                  "status",
+                  "assinado_em",
+                  "entregue_em",
+                  "entregue_por",
+                ],
                 dados.reservas.map((r) => [
                   r.convidado,
                   r.codigo,
                   r.presente,
                   r.quantidade,
+                  r.status_entrega,
                   r.criado_em,
+                  r.entregue_em || "",
+                  r.entregue_por_nome || "",
                 ]),
               )
             }
@@ -2651,11 +2792,10 @@ export function DashboardNoivos({
                   min={1}
                   max={10000}
                   value={novoPresenteQuantidade}
-                  onChange={(e) =>
-                    setNovoPresenteQuantidade(Number(e.target.value))
-                  }
-                  required
+                  onChange={(e) => setNovoPresenteQuantidade(e.target.value)}
+                  placeholder="Sem limite"
                 />
+                <small>Deixe vazio para permitir assinaturas sem limite.</small>
               </label>
               <label className="gift-create-description">
                 Descrição
@@ -2733,8 +2873,10 @@ export function DashboardNoivos({
                       style: "currency",
                       currency: "BRL",
                     })}{" "}
-                    · {p.quantidade_assinada} de {p.quantidade_total} assinados ·{" "}
-                    {p.quantidade_restante} disponíveis
+                    · {p.quantidade_assinada} assinados ·{" "}
+                    {p.quantidade_total === null
+                      ? "sem limite de assinaturas"
+                      : `${p.quantidade_restante ?? 0} disponíveis de ${p.quantidade_total}`}
                   </small>
                   <select
                     aria-label={`Categoria de ${p.nome}`}
@@ -2752,12 +2894,9 @@ export function DashboardNoivos({
                 <div className="gift-admin-actions">
                   <button
                     className="secondary"
-                    onClick={() => {
-                      setPresenteEditando(p.id);
-                      setUrlsImagens((p.imagens ?? []).join("\n"));
-                    }}
+                    onClick={() => abrirEdicaoPresente(p)}
                   >
-                    Editar imagens
+                    Editar presente
                   </button>
                   <button
                     className="danger-button"
@@ -2769,40 +2908,116 @@ export function DashboardNoivos({
                 </div>
               </div>
               {presenteEditando === p.id && (
-                <div className="gift-image-editor">
-                  <label htmlFor={`imagens-${p.id}`}>
-                    Links das imagens — uma URL por linha
-                  </label>
-                  <textarea
-                    id={`imagens-${p.id}`}
-                    rows={5}
-                    value={urlsImagens}
-                    onChange={(e) => setUrlsImagens(e.target.value)}
-                    placeholder={
-                      "https://exemplo.com/imagem-1.jpg\nhttps://exemplo.com/imagem-2.jpg"
-                    }
-                  />
-                  <small>
-                    Até 10 imagens. Deixe vazio para usar a imagem padrão.
-                  </small>
-                  <div className="expiry-actions">
-                    <button
-                      className="primary"
-                      onClick={() => salvarImagensPresente(p.id)}
-                    >
-                      Salvar imagens
+                <form
+                  className="gift-edit-form"
+                  onSubmit={(e) => void salvarEdicaoPresente(e, p)}
+                >
+                  <div className="section-heading-row">
+                    <div>
+                      <p className="eyebrow">Edição completa</p>
+                      <h3>Editar presente</h3>
+                      <p>
+                        Altere nome, descrição, categoria, valor, quantidade e
+                        imagens no mesmo formulário.
+                      </p>
+                    </div>
+                  </div>
+                  <div className="gift-create-grid">
+                    <label>
+                      Nome do presente
+                      <input
+                        value={edicaoPresenteNome}
+                        onChange={(e) => setEdicaoPresenteNome(e.target.value)}
+                        maxLength={150}
+                        required
+                      />
+                    </label>
+                    <label>
+                      Categoria
+                      <select
+                        value={edicaoPresenteCategoria}
+                        onChange={(e) =>
+                          setEdicaoPresenteCategoria(e.target.value)
+                        }
+                      >
+                        <option value="">Sem categoria</option>
+                        {categorias
+                          .filter((categoria) => categoria.ativo)
+                          .map((categoria) => (
+                            <option key={categoria.id} value={categoria.id}>
+                              {categoria.nome}
+                            </option>
+                          ))}
+                      </select>
+                    </label>
+                    <label>
+                      Valor em reais
+                      <input
+                        inputMode="decimal"
+                        value={edicaoPresenteValor}
+                        onChange={(e) => setEdicaoPresenteValor(e.target.value)}
+                        placeholder="299,90"
+                        required
+                      />
+                    </label>
+                    <label>
+                      Quantidade
+                      <input
+                        type="number"
+                        min={1}
+                        max={10000}
+                        value={edicaoPresenteQuantidade}
+                        onChange={(e) =>
+                          setEdicaoPresenteQuantidade(e.target.value)
+                        }
+                        placeholder="Sem limite"
+                      />
+                      <small>
+                        Deixe vazio para permitir assinaturas sem limite.
+                      </small>
+                    </label>
+                    <label className="gift-create-description">
+                      Descrição
+                      <textarea
+                        rows={4}
+                        value={edicaoPresenteDescricao}
+                        onChange={(e) =>
+                          setEdicaoPresenteDescricao(e.target.value)
+                        }
+                        maxLength={1000}
+                      />
+                    </label>
+                    <label className="gift-create-images">
+                      Links das imagens — uma URL por linha
+                      <textarea
+                        rows={5}
+                        value={edicaoPresenteImagens}
+                        onChange={(e) =>
+                          setEdicaoPresenteImagens(e.target.value)
+                        }
+                        placeholder={
+                          "https://exemplo.com/imagem-1.jpg\nhttps://exemplo.com/imagem-2.jpg"
+                        }
+                      />
+                      <small>
+                        Até 10 imagens. Deixe vazio para usar a imagem padrão.
+                      </small>
+                    </label>
+                  </div>
+                  <div className="gift-form-actions">
+                    <button className="primary" disabled={salvandoPresente}>
+                      {salvandoPresente ? "Salvando..." : "Salvar alterações"}
                     </button>
                     <button
+                      type="button"
                       className="secondary"
-                      onClick={() => {
-                        setPresenteEditando(null);
-                        setUrlsImagens("");
-                      }}
+                      disabled={salvandoPresente}
+                      onClick={fecharEdicaoPresente}
                     >
                       Cancelar
                     </button>
                   </div>
-                </div>
+                </form>
               )}
             </article>
           ))}
@@ -2894,8 +3109,39 @@ export function DashboardNoivos({
                 <small>
                   {r.convidado} · {r.codigo}
                 </small>
+                {r.entregue_em && (
+                  <small>
+                    Entregue em {new Date(r.entregue_em).toLocaleString("pt-BR")}
+                    {r.entregue_por_nome ? ` · confirmado por ${r.entregue_por_nome}` : ""}
+                  </small>
+                )}
               </div>
-              <strong>{r.quantidade}</strong>
+              <div className="delivery-controls">
+                <span
+                  className={`delivery-badge ${
+                    r.status_entrega === "Entregue" ? "delivered" : "signed"
+                  }`}
+                >
+                  {r.status_entrega}
+                </span>
+                <strong>{r.quantidade}</strong>
+                {r.meio === "fisico" && (
+                  <button
+                    type="button"
+                    className="secondary"
+                    onClick={() =>
+                      void alterarEntregaPresente(
+                        r,
+                        r.status_entrega !== "Entregue",
+                      )
+                    }
+                  >
+                    {r.status_entrega === "Entregue"
+                      ? "Voltar para Assinado"
+                      : "Confirmar entrega"}
+                  </button>
+                )}
+              </div>
             </article>
           ))}
         </div>
@@ -3024,7 +3270,9 @@ export function DashboardNoivos({
               <article key={r.id}>
                 <div>
                   <b>{r.convidado}</b>
-                  <small>{r.presente}</small>
+                  <small>
+                    {r.presente} · {r.status_entrega}
+                  </small>
                 </div>
                 <strong>{r.quantidade}</strong>
               </article>

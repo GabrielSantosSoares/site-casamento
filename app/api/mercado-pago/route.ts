@@ -108,6 +108,7 @@ type LinhaPagamento = {
   aprovado_em: string | null;
   reembolso_id: string | null;
   reembolsado_em: string | null;
+  codigo_doador: string | null;
   quantidade: number;
   presentes?: { nome?: string } | null;
   convites?: { nome_familia?: string; codigo?: string } | null;
@@ -127,6 +128,7 @@ type PagamentoAgrupado = {
   reembolso_id: string | null;
   reembolsado_em: string | null;
   convite_codigo: string | undefined;
+  codigo_presenteador: string | undefined;
   itens: Array<{ nome: string; quantidade: number }>;
 };
 async function config() {
@@ -214,7 +216,7 @@ export async function GET(request: NextRequest) {
     );
   const c = await config();
   const tr = await table(
-    "reservas_presentes?meio=eq.mercado_pago&select=id,external_reference,pagamento_id,pagamento_status,status,pagador_nome,pagador_email,meio_pagamento_detalhe,valor_transacao,criado_em,aprovado_em,reembolso_id,reembolsado_em,quantidade,presentes(nome),convites(nome_familia,codigo)&order=criado_em.desc",
+    "reservas_presentes?meio=eq.mercado_pago&select=id,external_reference,pagamento_id,pagamento_status,status,pagador_nome,pagador_email,meio_pagamento_detalhe,valor_transacao,criado_em,aprovado_em,reembolso_id,reembolsado_em,codigo_doador,quantidade,presentes(nome),convites(nome_familia,codigo)&order=criado_em.desc",
   );
   const rows = tr.ok ? ((await tr.json()) as LinhaPagamento[]) : [];
   const agrupadas = new Map<string, PagamentoAgrupado>();
@@ -245,6 +247,7 @@ export async function GET(request: NextRequest) {
       reembolso_id: r.reembolso_id,
       reembolsado_em: r.reembolsado_em,
       convite_codigo: r.convites?.codigo,
+      codigo_presenteador: r.codigo_doador || r.convites?.codigo,
       itens: [item],
     });
   }

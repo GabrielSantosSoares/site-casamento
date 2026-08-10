@@ -48,30 +48,34 @@ supabase/migration_033_revisao_geral_perfis_notificacoes.sql
 supabase/migration_034_codigos_organizacao_login.sql
 supabase/migration_035_grupos_integrados_convidados.sql
 supabase/migration_036_modelos_duplicidades_gestao_presentes.sql
+supabase/migration_037_edicao_presentes_entregas_ilimitados.sql
+supabase/migration_038_funcoes_individuais_manuais_criancas.sql
 ```
 
-As migrações 033 a 036 corrigem permissões dos perfis, confirmação por
+As migrações 033 a 038 corrigem permissões dos perfis, confirmação por
 responsável, sessões de logout, redefinição temporária de senha, notificações,
 proteção dos códigos individuais, códigos da organização, grupos integrados,
 duplicidades na importação e cadastro/remoção manual de presentes. Novas senhas
 temporárias têm oito dígitos, e os acessos antigos de seis dígitos continuam
 aceitos até a troca obrigatória. A instalação completa já contém todas essas
-migrações.
+migrações. A migração 037 também habilita edição completa dos presentes,
+quantidade ilimitada, status de entrega física e o código do presenteador nos
+pagamentos. A migração 038 restringe a função a cada convidado, libera as
+funções infantis somente à própria criança e a seus responsáveis e associa os
+manuais corretos a cada acesso.
 
-## GitHub e Vercel
+## Desenvolvimento e validação
 
-O pacote usa Next.js nativo e Node.js 22.x. Envie os arquivos diretamente para
-a raiz do repositório e configure na Vercel as variáveis listadas em
-`.env.example`.
+Requer Node.js 22.13 ou superior.
 
 ```bash
 npm ci
 npm run lint
-npm run build
+npm test
 ```
 
-O processamento automático de reservas é executado pelo Supabase Cron; não há
-Cron da Vercel nem variável `CRON_SECRET`.
+`npm test` gera o artefato de produção do Next.js e executa os testes de
+renderização, permissões de função, responsáveis e manuais.
 
 ## Pagamentos
 

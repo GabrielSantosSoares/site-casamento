@@ -8,6 +8,10 @@ import {
 } from "../componentes/ListaPresentes";
 import { ManualFuncao } from "../componentes/ManualFuncao";
 import { Dashboard, DashboardNoivos } from "../componentes/DashboardNoivos";
+import {
+  resolverAcessoFuncoes,
+  rotuloResumoFuncao,
+} from "../lib/funcoes";
 import QRCode from "qrcode";
 
 type View =
@@ -16,7 +20,6 @@ type View =
   | "presenca"
   | "presentes"
   | "cortejo"
-  | "manual"
   | "noivos";
 type Guest = {
   id: string;
@@ -99,176 +102,9 @@ function partesEvento(evento?: EventInfo | null) {
   };
 }
 
-type PapelCategoria =
-  | "padrinho"
-  | "madrinha"
-  | "amigo-noivo"
-  | "demoiselle"
-  | "porta-biblia"
-  | "porta-alianca"
-  | "pajem"
-  | "daminha"
-  | "outra";
-
-type PapelAgrupado = {
-  chave: string;
-  rotulo: string;
-  infantil: boolean;
-};
-
-const normalizarPapel = (valor: string) =>
-  valor
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase()
-    .trim();
-
-function categoriaPapel(funcao: string): PapelCategoria {
-  const valor = normalizarPapel(funcao);
-  if (valor.includes("madrinha")) return "madrinha";
-  if (valor.includes("padrinh")) return "padrinho";
-  if (valor.includes("amigo") && valor.includes("noivo")) return "amigo-noivo";
-  if (valor.includes("demois")) return "demoiselle";
-  if (valor.includes("biblia")) return "porta-biblia";
-  if (valor.includes("alianca")) return "porta-alianca";
-  if (
-    valor.includes("pajem") ||
-    valor.includes("pagen") ||
-    valor.includes("pajen")
-  )
-    return "pajem";
-  if (valor.includes("daminha")) return "daminha";
-  return "outra";
-}
-
-function agruparPapeis(
-  funcoes: string[],
-  funcaoDaPessoa?: string | null,
-): PapelAgrupado[] {
-  const registros = funcoes
-    .map((funcao) => ({
-      funcao: funcao.trim(),
-      categoria: categoriaPapel(funcao),
-    }))
-    .filter(({ funcao }) => Boolean(funcao));
-  const quantidade = (categoria: PapelCategoria) =>
-    registros.filter((item) => item.categoria === categoria).length;
-  const temPadrinho = quantidade("padrinho") > 0;
-  const temMadrinha = quantidade("madrinha") > 0;
-  const papeis: PapelAgrupado[] = [];
-
-  if (temPadrinho || temMadrinha) {
-    papeis.push({
-      chave: "padrinhos",
-      rotulo:
-        temPadrinho && temMadrinha
-          ? "padrinhos"
-          : temMadrinha
-            ? quantidade("madrinha") > 1
-              ? "madrinhas"
-              : "madrinha"
-            : quantidade("padrinho") > 1
-              ? "padrinhos"
-              : "padrinho",
-      infantil: false,
-    });
-  }
-
-  const adicionar = (
-    categoria: PapelCategoria,
-    singular: string,
-    plural: string,
-    infantil = false,
-  ) => {
-    const total = quantidade(categoria);
-    if (total)
-      papeis.push({
-        chave: categoria,
-        rotulo: total > 1 ? plural : singular,
-        infantil,
-      });
-  };
-
-  adicionar("amigo-noivo", "amigo do noivo", "amigos do noivo");
-  adicionar("demoiselle", "demoiselle", "demoiselles");
-  adicionar("porta-biblia", "porta-bíblia", "porta-bíblias", true);
-  adicionar("porta-alianca", "porta-aliança", "porta-alianças", true);
-  adicionar("pajem", "pajem", "pajens", true);
-  adicionar("daminha", "daminha", "daminhas", true);
-
-  registros
-    .filter((item) => item.categoria === "outra")
-    .forEach((item) => {
-      const chave = `outra:${normalizarPapel(item.funcao)}`;
-      if (!papeis.some((papel) => papel.chave === chave)) {
-        papeis.push({
-          chave,
-          rotulo: item.funcao.toLowerCase(),
-          infantil: false,
-        });
-      }
-    });
-
-  if (funcaoDaPessoa) {
-    const categoria = categoriaPapel(funcaoDaPessoa);
-    const chave =
-      categoria === "padrinho" || categoria === "madrinha"
-        ? "padrinhos"
-        : categoria === "outra"
-          ? `outra:${normalizarPapel(funcaoDaPessoa)}`
-          : categoria;
-    papeis.sort((a, b) => (a.chave === chave ? -1 : b.chave === chave ? 1 : 0));
-  }
-
-  return papeis;
-}
-
-function listarPapeis(papeis: PapelAgrupado[]) {
-  const rotulos = papeis.map((papel) => papel.rotulo);
-  if (rotulos.length < 2) return rotulos[0] ?? "";
-  if (rotulos.length === 2) return `${rotulos[0]} e ${rotulos[1]}`;
-  return `${rotulos.slice(0, -1).join(", ")} e ${rotulos[rotulos.length - 1]}`;
-}
-
-function mensagemMeuPapel(convite: Invitation | null) {
-  if (!convite) return "";
-  const pessoa = convite.convidados.find(
-    (convidado) =>
-      convidado.codigo_individual.toUpperCase() ===
-      convite.codigo.toUpperCase(),
-  );
-  const funcoesDoGrupo = convite.convidados
-    .map((convidado) => convidado.funcao)
-    .filter((funcao): funcao is string => Boolean(funcao?.trim()));
-  if (!funcoesDoGrupo.length && convite.funcao_cortejo) {
-    funcoesDoGrupo.push(convite.funcao_cortejo);
-  }
-
-  const papeis = agruparPapeis(funcoesDoGrupo, pessoa?.funcao);
-  const papeisAdultos = papeis.filter((papel) => !papel.infantil);
-  const papeisInfantis = papeis.filter((papel) => papel.infantil);
-
-  if (!pessoa?.funcao && !papeisAdultos.length && papeisInfantis.length) {
-    return `Você é nosso responsável por ${listarPapeis(papeisInfantis)}.`;
-  }
-
-  if (funcoesDoGrupo.length <= 1) {
-    const papel = papeis[0];
-    const artigo =
-      papel && ["madrinha", "daminha", "demoiselle"].includes(papel.rotulo)
-        ? "nossa"
-        : "nosso";
-    return `Você é ${artigo} ${listarPapeis(papeis)}.`;
-  }
-
-  return `Vocês são nossos ${listarPapeis(papeis)}.`;
-}
-
 function conviteTemPapel(convite: Invitation | null) {
-  return Boolean(
-    convite?.funcao_cortejo ||
-    convite?.convidados.some((convidado) => Boolean(convidado.funcao?.trim())),
-  );
+  if (!convite) return false;
+  return resolverAcessoFuncoes(convite.codigo, convite.convidados).temFuncao;
 }
 
 export default function Home() {
@@ -727,6 +563,12 @@ export default function Home() {
 
   const eventoAtual = invitation?.evento ?? eventoPublico ?? EVENTO_PADRAO;
   const dataEvento = partesEvento(eventoAtual);
+  const acessoFuncoes = invitation
+    ? resolverAcessoFuncoes(invitation.codigo, invitation.convidados)
+    : null;
+  const resumoFuncao = acessoFuncoes
+    ? rotuloResumoFuncao(acessoFuncoes)
+    : "";
 
   if (!guest) {
     return (
@@ -966,9 +808,7 @@ export default function Home() {
         <aside>
           <p>Convite de</p>
           <h3>{invitation?.nome_familia}</h3>
-          {invitation?.funcao_cortejo && (
-            <span className="role">{invitation.funcao_cortejo}</span>
-          )}
+          {resumoFuncao && <span className="role">{resumoFuncao}</span>}
           <div className="mini-date">
             <b>{dataEvento.dia}</b>
             <span>
@@ -1372,52 +1212,8 @@ export default function Home() {
               )}
             </>
           )}
-          {view === "cortejo" && (
-            <div className="panel cortege">
-              <p className="eyebrow">Seu papel no grande dia</p>
-              <h1>{mensagemMeuPapel(invitation)}</h1>
-              <p>
-                Obrigado por aceitarem estar ao nosso lado e testemunharem esta
-                união.
-              </p>
-              <div className="instruction-grid">
-                {invitation?.instrucoes_cortejo.map((item) => (
-                  <article key={item.titulo}>
-                    <span>{item.icone}</span>
-                    <b>{item.titulo}</b>
-                    <p>{item.texto}</p>
-                  </article>
-                ))}
-              </div>
-              <div className="note">
-                <b>Importante</b>
-                <p>
-                  Leve seu carinho e sua oração. O restante nós preparamos para
-                  vocês.
-                </p>
-              </div>
-              {(invitation?.manuais?.length ?? 0) > 0 && (
-                <button
-                  className="primary manual-button"
-                  type="button"
-                  onClick={() => setView("manual")}
-                >
-                  Abrir manual da função
-                </button>
-              )}
-            </div>
-          )}
-          {view === "manual" && (
-            <div className="manual-view">
-              <button
-                className="back-link"
-                type="button"
-                onClick={() => setView("cortejo")}
-              >
-                ← Voltar para Meu Papel
-              </button>
-              <ManualFuncao codigos={invitation?.manuais ?? []} />
-            </div>
+          {view === "cortejo" && acessoFuncoes?.temFuncao && (
+            <ManualFuncao acesso={acessoFuncoes} />
           )}
           {view === "noivos" &&
             (dashboard ? (

@@ -19,6 +19,22 @@ type PainelAdministrativo = {
   perfil?: string;
   conta?: { nome?: string; usuario?: string };
 };
+type ConvidadoConviteRpc = {
+  id: string;
+  nome?: string;
+  codigo_individual?: string;
+  pode_gerenciar?: boolean;
+  funcao?: string | null;
+  crianca?: boolean;
+  [chave: string]: unknown;
+};
+type ConviteRpc = {
+  perfil_acesso?: string;
+  funcao_cortejo?: string | null;
+  convidados?: ConvidadoConviteRpc[];
+  responsaveis?: Array<Record<string, unknown>>;
+  [chave: string]: unknown;
+};
 
 async function rpc(name: string, body: Record<string, unknown>) {
   if (!supabaseUrl || !supabaseKey) return null;
@@ -74,6 +90,61 @@ async function verificarHashSenha(senha:string,phc:string){
   return esperado.length===calculado.length&&timingSafeEqual(esperado,calculado);
 }
 
+function sanitizarFuncoesDoConvite(
+  convite: ConviteRpc,
+  codigoAcesso: string,
+): ConviteRpc {
+  if (["noivos", "assessoria", "admin"].includes(convite.perfil_acesso ?? ""))
+    return convite;
+
+  const convidados = Array.isArray(convite.convidados)
+    ? convite.convidados
+    : [];
+  const codigo = codigoAcesso.trim().toUpperCase();
+  const pessoa = convidados.find(
+    (convidado) =>
+      String(convidado.codigo_individual ?? "").trim().toUpperCase() === codigo,
+  );
+  const podeGerenciarCriancas = Boolean(
+    pessoa?.pode_gerenciar && !pessoa.crianca,
+  );
+  const idsComFuncaoLiberada = new Set<string>();
+  if (pessoa?.id) idsComFuncaoLiberada.add(pessoa.id);
+  if (podeGerenciarCriancas) {
+    convidados.forEach((convidado) => {
+      if (convidado.crianca && String(convidado.funcao ?? "").trim())
+        idsComFuncaoLiberada.add(convidado.id);
+    });
+  }
+
+  const podeVerCodigosDoGrupo = Boolean(pessoa?.pode_gerenciar);
+  const convidadosProtegidos = convidados.map((convidado) => ({
+    ...convidado,
+    funcao: idsComFuncaoLiberada.has(convidado.id)
+      ? convidado.funcao ?? null
+      : null,
+    codigo_individual:
+      convidado.id === pessoa?.id || podeVerCodigosDoGrupo
+        ? convidado.codigo_individual
+        : "PROTEGIDO",
+  }));
+  const responsaveisProtegidos = Array.isArray(convite.responsaveis)
+    ? convite.responsaveis.map((responsavel) => ({
+        ...responsavel,
+        funcao: responsavel.id === pessoa?.id ? responsavel.funcao ?? null : null,
+      }))
+    : [];
+
+  return {
+    ...convite,
+    funcao_cortejo: pessoa?.funcao ?? null,
+    manuais: [],
+    pode_gerenciar: Boolean(pessoa?.pode_gerenciar),
+    convidados: convidadosProtegidos,
+    responsaveis: responsaveisProtegidos,
+  };
+}
+
 export async function GET() {
   const response=await rpc("evento_publico",{});
   if(!response?.ok)return NextResponse.json({evento:EVENTO_PADRAO});
@@ -102,7 +173,7 @@ export async function POST(request: NextRequest) {
       valor?:number;
       links_fotos?:unknown[];
       descricao?:string;
-      quantidade?:number;
+      quantidade?:number|null;
       permitir_duplicado?:boolean;
     }>;
     nome?:string;
@@ -172,8 +243,9 @@ export async function POST(request: NextRequest) {
     const response = await rpc("buscar_convite", { p_codigo: codigo });
     if (!response) return NextResponse.json({ error: "Supabase não configurado." }, { status: 503 });
     if (!response.ok) return NextResponse.json({ error: "Não foi possível consultar o convite." }, { status: 502 });
-    const convite = await response.json();
-    if (!convite) return NextResponse.json({ error: "Código não encontrado." }, { status: 404 });
+    const conviteBruto = await response.json() as ConviteRpc | null;
+    if (!conviteBruto) return NextResponse.json({ error: "Código não encontrado." }, { status: 404 });
+    const convite = sanitizarFuncoesDoConvite(conviteBruto, codigo as string);
     const giftsResponse=await rpc("listar_presentes",{});
     return NextResponse.json({convite,presentes:giftsResponse?.ok?await giftsResponse.json():[],mercado_pago_disponivel:await mercadoPagoDisponivel()});
   }
@@ -310,20 +382,25 @@ export async function POST(request: NextRequest) {
     if(!token)return NextResponse.json({error:"Faça login novamente."},{status:401});
     if(!data.acao||!data.dados)return NextResponse.json({error:"Dados incompletos."},{status:400});
     let dadosPresente:Record<string,unknown>;
-    if(data.acao==="criar"){
+    if(data.acao==="criar"||data.acao==="editar"){
+      const id=data.acao==="editar"?String(data.dados.id??""):null;
       const nome=String(data.dados.nome??"").trim().slice(0,150);
       const descricao=String(data.dados.descricao??"").trim().slice(0,1000);
       const categoriaId=data.dados.categoria_id?String(data.dados.categoria_id):null;
       const precoCentavos=Number(data.dados.preco_centavos);
-      const quantidadeTotal=Number(data.dados.quantidade_total);
+      const quantidadeBruta=data.dados.quantidade_total;
+      const quantidadeTotal=quantidadeBruta===null||quantidadeBruta===undefined||String(quantidadeBruta).trim()===""
+        ?null:Number(quantidadeBruta);
       const imagensBrutas=Array.isArray(data.dados.imagens)?data.dados.imagens:[];
       const imagens=imagensBrutas.map((url)=>String(url).trim().slice(0,1000)).filter(Boolean);
-      if(nome.length<2||!Number.isInteger(precoCentavos)||precoCentavos<0||precoCentavos>100000000
-        ||!Number.isInteger(quantidadeTotal)||quantidadeTotal<1||quantidadeTotal>10000
+      if((id!==null&&!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id))
+        ||nome.length<2||!Number.isInteger(precoCentavos)||precoCentavos<0||precoCentavos>100000000
+        ||(quantidadeTotal!==null&&(!Number.isInteger(quantidadeTotal)||quantidadeTotal<1||quantidadeTotal>10000))
         ||(categoriaId!==null&&!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(categoriaId))
         ||imagens.length>10||imagens.some((url)=>!/^https?:\/\//i.test(url)))
         return NextResponse.json({error:"Revise o nome, valor, quantidade, categoria e links das imagens."},{status:400});
       dadosPresente={
+        ...(id?{id}:{}),
         nome,descricao,categoria_id:categoriaId,preco_centavos:precoCentavos,
         quantidade_total:quantidadeTotal,imagens,
         permitir_duplicado:data.dados.permitir_duplicado===true,
@@ -341,6 +418,20 @@ export async function POST(request: NextRequest) {
     });
     if(!response?.ok)return NextResponse.json({error:"Não foi possível atualizar a lista. Execute a migração mais recente no Supabase."},{status:502});
     if((await response.json())!==true)return NextResponse.json({error:"Acesso não permitido, presente duplicado ou dados inválidos."},{status:403});
+    return NextResponse.json({success:true});
+  }
+  if(data.action==="administrar_entrega_presente"){
+    const token=request.cookies.get("sessao_noivos")?.value;
+    if(!token)return NextResponse.json({error:"Faça login novamente."},{status:401});
+    const reservaId=String(data.dados?.reserva_id??"");
+    const entregue=data.dados?.entregue;
+    if(!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(reservaId)||typeof entregue!=="boolean")
+      return NextResponse.json({error:"Assinatura ou status de entrega inválido."},{status:400});
+    const response=await rpc("administrar_entrega_presente",{
+      p_token_hash:tokenHash(token),p_reserva_id:reservaId,p_entregue:entregue,
+    });
+    if(!response?.ok)return NextResponse.json({error:"Não foi possível atualizar a entrega. Execute a migração mais recente no Supabase."},{status:502});
+    if((await response.json())!==true)return NextResponse.json({error:"Acesso não permitido ou assinatura física inválida."},{status:403});
     return NextResponse.json({success:true});
   }
   if(data.action==="importar_convidados"){
@@ -372,7 +463,8 @@ export async function POST(request: NextRequest) {
       valor:Number(item.valor??0),
       links_fotos:Array.isArray(item.links_fotos)?item.links_fotos.map((v:unknown)=>String(v).trim().slice(0,1000)).filter(Boolean).slice(0,10):[],
       descricao:String(item.descricao??"").trim().slice(0,1000),
-      quantidade:Math.max(1,Math.min(10000,Math.trunc(Number(item.quantidade)||1))),
+      quantidade:item.quantidade===null||item.quantidade===undefined||String(item.quantidade).trim()===""
+        ?null:Math.max(1,Math.min(10000,Math.trunc(Number(item.quantidade)||1))),
       permitir_duplicado:item.permitir_duplicado===true,
     })).filter(item=>item.nome.length>=2&&Number.isFinite(item.valor)&&item.valor>=0&&item.links_fotos.every((url:string)=>/^https?:\/\//i.test(url)));
     if(!linhas.length)return NextResponse.json({error:"Nenhum presente válido foi encontrado."},{status:400});
