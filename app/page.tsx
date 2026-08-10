@@ -104,7 +104,11 @@ function partesEvento(evento?: EventInfo | null) {
 
 function conviteTemPapel(convite: Invitation | null) {
   if (!convite) return false;
-  return resolverAcessoFuncoes(convite.codigo, convite.convidados).temFuncao;
+  return resolverAcessoFuncoes(
+    convite.codigo,
+    convite.convidados,
+    convite.pode_gerenciar,
+  ).temFuncao;
 }
 
 export default function Home() {
@@ -564,7 +568,11 @@ export default function Home() {
   const eventoAtual = invitation?.evento ?? eventoPublico ?? EVENTO_PADRAO;
   const dataEvento = partesEvento(eventoAtual);
   const acessoFuncoes = invitation
-    ? resolverAcessoFuncoes(invitation.codigo, invitation.convidados)
+    ? resolverAcessoFuncoes(
+        invitation.codigo,
+        invitation.convidados,
+        invitation.pode_gerenciar,
+      )
     : null;
   const resumoFuncao = acessoFuncoes
     ? rotuloResumoFuncao(acessoFuncoes)

@@ -1,78 +1,63 @@
-# Publicação — Gabriel e Alanna
+# Publicação no GitHub e na Vercel
 
-Este pacote foi preparado para GitHub + Vercel e não contém credenciais reais.
+Este pacote está preparado para Next.js na Vercel e não contém credenciais
+reais.
 
-## 1. Enviar ao GitHub
+## 1. GitHub
 
 1. Extraia o ZIP.
-2. Crie um repositório privado no GitHub.
-3. Envie o conteúdo extraído, deixando `package.json` na raiz.
-4. Não envie `.env.local` nem qualquer arquivo com credenciais.
+2. Envie o conteúdo extraído para a raiz do repositório, de forma que
+   `package.json` fique na raiz.
+3. Não envie `.env.local` nem qualquer arquivo com credenciais.
 
-## 2. Criar o projeto na Vercel
+## 2. Vercel
 
-1. Na Vercel, escolha **Add New > Project**.
-2. Importe o repositório privado.
-3. Confirme **Framework Preset: Next.js** e **Root Directory: `./`**.
-4. Cadastre as variáveis de ambiente antes do primeiro deploy.
+1. Importe o repositório do GitHub.
+2. Confirme o preset **Next.js**.
+3. Mantenha o diretório raiz como `./`.
+4. Use Node.js 22.
+5. Cadastre as variáveis abaixo em Production, Preview e Development:
 
-## 3. Variáveis de ambiente
+| Variável | Observação |
+|---|---|
+| `SUPABASE_URL` | URL do projeto Supabase |
+| `SUPABASE_PUBLISHABLE_KEY` | Chave pública do Supabase |
+| `SUPABASE_SECRET_KEY` | Chave secreta, somente no servidor |
+| `ADMIN_SETUP_KEY` | Chave forte para o primeiro acesso do administrador |
+| `MP_CREDENTIAL_ENCRYPTION_KEY` | Chave forte e permanente para cifrar dados |
 
-Cadastre para **Production**, **Preview** e **Development**:
+O Access Token do Mercado Pago é salvo cifrado pelo próprio painel
+administrativo e não deve ser colocado diretamente no repositório.
 
-| Nome | Onde obter | Secreta? |
-|---|---|---|
-| `SUPABASE_URL` | Supabase > Project Settings > API | Não |
-| `SUPABASE_PUBLISHABLE_KEY` | Supabase > Project Settings > API | Não |
-| `SUPABASE_SECRET_KEY` | Supabase > Project Settings > API | Sim |
-| `ADMIN_SETUP_KEY` | Gere uma chave inicial longa e aleatória | Sim |
-| `MP_CREDENTIAL_ENCRYPTION_KEY` | Use a mesma chave forte já configurada | Sim |
+## 3. Supabase
 
-`ADMIN_SETUP_KEY` é usada somente para criar a primeira senha do usuário
-principal `admin`. Não altere `MP_CREDENTIAL_ENCRYPTION_KEY` depois que as
-credenciais do Mercado Pago forem salvas, pois ela protege dados já cifrados.
+- Banco novo: execute somente
+  `supabase/INSTALACAO_COMPLETA_BANCO_NOVO.sql`.
+- Banco existente: execute somente as migrações ainda não aplicadas.
+- Para a atualização mais recente das funções e dos responsáveis por crianças,
+  aplique `migration_038_funcoes_individuais_manuais_criancas.sql` e depois
+  `migration_039_responsaveis_criancas_trajes.sql`.
 
-O Access Token do Mercado Pago é salvo cifrado pela tela administrativa e não
-deve ser inserido diretamente nas variáveis da Vercel.
+A rotina de reservas vencidas usa o Supabase Cron da migração 032. Não
+configure um Cron equivalente na Vercel.
 
-## 4. Banco Supabase
+## 4. Mercado Pago
 
-Faça um backup antes de aplicar migrações.
-
-- Banco novo: execute `supabase/INSTALACAO_COMPLETA_BANCO_NOVO.sql`.
-- Banco já atualizado até a migração 033: execute
-  `supabase/migration_034_codigos_organizacao_login.sql`.
-- Banco anterior à migração 033: execute as migrações pendentes em ordem,
-  terminando pela 034.
-
-A expiração automática de reservas é executada pelo Supabase Cron configurado
-na migração 032. Não é necessário configurar cron na Vercel.
-
-## 5. Primeiro deploy e login
-
-Depois de cadastrar as variáveis, faça o deploy e teste:
-
-- `/x`: primeiro cadastro do `admin`; depois, login da organização por usuário
-  ou código;
-- código da organização + senha temporária na entrada pública;
-- troca obrigatória da senha temporária após o login;
-- criação e alteração de códigos de integrantes na página **Organização**;
-- lista de convidados em computador e celular.
-
-Senhas temporárias novas têm oito dígitos. Senhas temporárias antigas de seis
-dígitos continuam aceitas até serem substituídas.
-
-## 6. Domínio e Mercado Pago
-
-Em **Vercel > Settings > Domains**, adicione o domínio e copie exatamente os
-registros DNS indicados. Depois, atualize no painel administrativo do site a
-URL-base definitiva com `https://`.
-
-No Mercado Pago, configure o webhook para:
+Depois de publicar, configure o webhook para:
 
 ```text
 https://SEU-DOMINIO/api/mercado-pago/webhook
 ```
 
-Teste pagamento, retorno e webhook antes de divulgar o domínio ou imprimir os
-QR Codes definitivos.
+Atualize também a URL-base no painel administrativo do site.
+
+## 5. Verificação final
+
+- acesso individual, por grupo e da organização;
+- confirmação de presença;
+- “Minha função”, responsáveis e downloads dos manuais;
+- presentes físicos, doações e confirmação de entrega;
+- pagamentos e webhook do Mercado Pago;
+- painéis administrativo, dos noivos e da assessoria;
+- geração de convites e QR Codes;
+- funcionamento em celular e computador.

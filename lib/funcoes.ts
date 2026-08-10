@@ -58,11 +58,32 @@ export function categoriaFuncao(funcao: string): CategoriaFuncao {
   return "outra";
 }
 
+export function ehFuncaoInfantil(funcao: string | null | undefined) {
+  if (!funcao?.trim()) return false;
+  const categoria = categoriaFuncao(funcao);
+  return (
+    [
+      "porta-biblia",
+      "porta-alianca",
+      "pajem",
+      "daminha",
+      "florista",
+      "noivinho",
+    ] as CategoriaFuncao[]
+  ).includes(categoria) || normalizarFuncao(funcao).includes("crianca");
+}
+
+export function ehCriancaDoCortejo(
+  convidado: Pick<ConvidadoComFuncao, "funcao" | "crianca">,
+) {
+  return convidado.crianca || ehFuncaoInfantil(convidado.funcao);
+}
+
 export function manualDaFuncao(
   convidado: Pick<ConvidadoComFuncao, "funcao" | "crianca">,
 ): CodigoManual | null {
   if (!convidado.funcao?.trim()) return null;
-  if (convidado.crianca) return "criancas";
+  if (ehCriancaDoCortejo(convidado)) return "criancas";
   const categoria = categoriaFuncao(convidado.funcao);
   if (categoria === "padrinho" || categoria === "madrinha") return "padrinhos";
   if (categoria === "demoiselle") return "demoiselles";
@@ -79,6 +100,7 @@ export function manualDaFuncao(
 export function resolverAcessoFuncoes(
   codigo: string,
   convidados: ConvidadoComFuncao[],
+  podeGerenciarGrupo = false,
 ): AcessoFuncoes {
   const codigoNormalizado = codigo.trim().toUpperCase();
   const pessoa =
@@ -88,13 +110,15 @@ export function resolverAcessoFuncoes(
     ) ?? null;
   const funcaoPropria = pessoa?.funcao?.trim() ? pessoa : null;
   const podeResponderPorCrianca = Boolean(
-    pessoa?.pode_gerenciar && !pessoa.crianca,
+    pessoa &&
+      !ehCriancaDoCortejo(pessoa) &&
+      (pessoa.pode_gerenciar || podeGerenciarGrupo),
   );
   const criancasGerenciadas = podeResponderPorCrianca
     ? convidados.filter(
         (convidado) =>
           convidado.id !== pessoa?.id &&
-          convidado.crianca &&
+          ehCriancaDoCortejo(convidado) &&
           Boolean(convidado.funcao?.trim()),
       )
     : [];

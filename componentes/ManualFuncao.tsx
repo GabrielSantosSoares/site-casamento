@@ -5,6 +5,7 @@ import {
   categoriaFuncao,
   CodigoManual,
   ConvidadoComFuncao,
+  ehCriancaDoCortejo,
   fraseMeuPapel,
 } from "../lib/funcoes";
 
@@ -17,6 +18,11 @@ type DetalhesFuncao = {
   apresentacao: string;
   traje: GrupoOrientacao[];
   orientacoes: string[];
+  desenho?: {
+    arquivo: string;
+    alt: string;
+    variante?: "criancas";
+  };
 };
 
 const ARQUIVOS_MANUAIS: Record<
@@ -52,10 +58,15 @@ function detalhesDaFuncao(convidado: ConvidadoComFuncao): DetalhesFuncao {
   const funcao = convidado.funcao?.trim() || "Criança do cortejo";
   const categoria = categoriaFuncao(funcao);
 
-  if (convidado.crianca) {
+  if (ehCriancaDoCortejo(convidado)) {
     return {
       apresentacao:
         "A participação no cortejo foi preparada para ser leve, acolhedora e especial. O bem-estar da criança vem sempre em primeiro lugar.",
+      desenho: {
+        arquivo: "/trajes/traje-criancas.webp",
+        alt: "Desenho de referência dos trajes das crianças do cortejo",
+        variante: "criancas",
+      },
       traje: [
         {
           titulo: "Meninos",
@@ -89,6 +100,10 @@ function detalhesDaFuncao(convidado: ConvidadoComFuncao): DetalhesFuncao {
     return {
       apresentacao:
         "Como madrinha, você foi escolhida para testemunhar esta união e permanecer perto de nós em um dos momentos mais importantes da nossa história.",
+      desenho: {
+        arquivo: "/trajes/traje-madrinha.webp",
+        alt: "Desenho de referência do traje da madrinha",
+      },
       traje: [
         {
           titulo: "Traje da madrinha",
@@ -108,6 +123,10 @@ function detalhesDaFuncao(convidado: ConvidadoComFuncao): DetalhesFuncao {
     return {
       apresentacao:
         "Como padrinho, você foi escolhido para testemunhar esta união e apoiar a nova família que estamos formando.",
+      desenho: {
+        arquivo: "/trajes/traje-padrinho.webp",
+        alt: "Desenho de referência do traje do padrinho",
+      },
       traje: [
         {
           titulo: "Traje do padrinho",
@@ -128,6 +147,10 @@ function detalhesDaFuncao(convidado: ConvidadoComFuncao): DetalhesFuncao {
     return {
       apresentacao:
         "Como demoiselle, sua presença próxima à noiva torna este momento ainda mais especial e representa carinho, amizade e apoio.",
+      desenho: {
+        arquivo: "/trajes/traje-demoiselle.webp",
+        alt: "Desenho de referência do traje da demoiselle",
+      },
       traje: [
         {
           titulo: "Traje da demoiselle",
@@ -147,6 +170,10 @@ function detalhesDaFuncao(convidado: ConvidadoComFuncao): DetalhesFuncao {
     return {
       apresentacao:
         "Você faz parte da história do noivo e terá uma presença especial ao lado dele durante a preparação e a celebração.",
+      desenho: {
+        arquivo: "/trajes/traje-amigo-noivo.webp",
+        alt: "Desenho de referência do traje do amigo do noivo",
+      },
       traje: [
         {
           titulo: "Traje do amigo do noivo",
@@ -185,18 +212,42 @@ function CartaoFuncao({
       </p>
       <h3>{convidado.funcao}</h3>
       <p>{detalhes.apresentacao}</p>
-      {detalhes.traje.length > 0 && (
-        <div className="function-attire-grid">
-          {detalhes.traje.map((grupo) => (
-            <section key={grupo.titulo}>
-              <h4>{grupo.titulo}</h4>
-              <ul>
-                {grupo.itens.map((item) => (
-                  <li key={item}>{item}</li>
-                ))}
-              </ul>
-            </section>
-          ))}
+      {(detalhes.desenho || detalhes.traje.length > 0) && (
+        <div className="function-attire-layout">
+          {detalhes.desenho && (
+            <figure
+              className={`function-attire-illustration ${
+                detalhes.desenho.variante === "criancas" ? "children" : ""
+              }`}
+            >
+              <div className="function-attire-image-crop">
+                <img
+                  src={detalhes.desenho.arquivo}
+                  alt={detalhes.desenho.alt}
+                  loading="lazy"
+                />
+              </div>
+              <figcaption>Desenho de referência do manual</figcaption>
+            </figure>
+          )}
+          {detalhes.traje.length > 0 && (
+            <div
+              className={`function-attire-grid ${
+                detalhes.traje.length === 1 ? "single" : ""
+              }`}
+            >
+              {detalhes.traje.map((grupo) => (
+                <section key={grupo.titulo}>
+                  <h4>{grupo.titulo}</h4>
+                  <ul>
+                    {grupo.itens.map((item) => (
+                      <li key={item}>{item}</li>
+                    ))}
+                  </ul>
+                </section>
+              ))}
+            </div>
+          )}
         </div>
       )}
       <section className="function-day-notes">
@@ -220,6 +271,33 @@ export function ManualFuncao({ acesso }: { acesso: AcessoFuncoes }) {
         Aqui estão somente as informações relacionadas à sua função e, quando
         aplicável, às crianças do cortejo pelas quais você é responsável.
       </p>
+
+      {acesso.manuais.length > 0 && (
+        <section className="function-downloads">
+          <p className="eyebrow">Materiais para guardar</p>
+          <h2>Baixar manuais</h2>
+          <p>
+            Os botões abaixo exibem apenas os manuais associados a você e às
+            crianças do cortejo pelas quais você é responsável.
+          </p>
+          <div>
+            {acesso.manuais.map((codigo) => {
+              const manual = ARQUIVOS_MANUAIS[codigo];
+              return (
+                <a
+                  className="primary manual-download"
+                  href={manual.arquivo}
+                  download
+                  key={codigo}
+                >
+                  <span aria-hidden="true">↓</span>
+                  Baixar {manual.titulo} (PDF)
+                </a>
+              );
+            })}
+          </div>
+        </section>
+      )}
 
       {acesso.funcaoPropria && (
         <section className="function-section">
@@ -249,32 +327,6 @@ export function ManualFuncao({ acesso }: { acesso: AcessoFuncoes }) {
         </section>
       )}
 
-      {acesso.manuais.length > 0 && (
-        <section className="function-downloads">
-          <p className="eyebrow">Materiais para guardar</p>
-          <h2>Baixar seus manuais</h2>
-          <p>
-            Os botões abaixo exibem apenas os manuais associados a você e às
-            crianças do cortejo pelas quais você é responsável.
-          </p>
-          <div>
-            {acesso.manuais.map((codigo) => {
-              const manual = ARQUIVOS_MANUAIS[codigo];
-              return (
-                <a
-                  className="primary manual-download"
-                  href={manual.arquivo}
-                  download
-                  key={codigo}
-                >
-                  <span aria-hidden="true">↓</span>
-                  Baixar {manual.titulo} (PDF)
-                </a>
-              );
-            })}
-          </div>
-        </section>
-      )}
     </div>
   );
 }

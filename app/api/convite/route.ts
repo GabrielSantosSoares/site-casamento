@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createHash, randomBytes, randomInt, timingSafeEqual } from "node:crypto";
 import { argon2id } from "@noble/hashes/argon2.js";
+import { ehCriancaDoCortejo } from "../../../lib/funcoes";
 
 const supabaseUrl = process.env.SUPABASE_URL;
 const supabaseKey = process.env.SUPABASE_PUBLISHABLE_KEY;
@@ -31,9 +32,15 @@ type ConvidadoConviteRpc = {
 type ConviteRpc = {
   perfil_acesso?: string;
   funcao_cortejo?: string | null;
+  pode_gerenciar?: boolean;
   convidados?: ConvidadoConviteRpc[];
   responsaveis?: Array<Record<string, unknown>>;
   [chave: string]: unknown;
+};
+
+type ConvidadoGrupoSeguro = ConvidadoConviteRpc & {
+  convite_id: string;
+  ordem?: number;
 };
 
 async function rpc(name: string, body: Record<string, unknown>) {
@@ -52,6 +59,48 @@ async function rpcAdmin(name:string,body:Record<string,unknown>){
     headers:{apikey:supabaseSecretKey,Authorization:`Bearer ${supabaseSecretKey}`,"Content-Type":"application/json"},
     body:JSON.stringify(body),cache:"no-store",
   });
+}
+
+async function enriquecerFuncoesDoGrupo(
+  convite: ConviteRpc,
+  codigoAcesso: string,
+): Promise<ConviteRpc> {
+  if (!supabaseUrl || !supabaseSecretKey) return convite;
+  const headers = {
+    apikey: supabaseSecretKey,
+    Authorization: `Bearer ${supabaseSecretKey}`,
+  };
+  const codigo = codigoAcesso.trim().toUpperCase();
+  const pessoaResponse = await fetch(
+    `${supabaseUrl}/rest/v1/convidados?codigo_individual=eq.${encodeURIComponent(codigo)}&select=id,convite_id,nome,codigo_individual,pode_gerenciar,funcao,crianca&limit=1`,
+    { headers, cache: "no-store" },
+  ).catch(() => null);
+  if (!pessoaResponse?.ok) return convite;
+  const pessoa = (await pessoaResponse.json() as ConvidadoGrupoSeguro[])[0];
+  if (!pessoa?.convite_id) return convite;
+
+  const grupoResponse = await fetch(
+    `${supabaseUrl}/rest/v1/convidados?convite_id=eq.${encodeURIComponent(pessoa.convite_id)}&select=id,convite_id,nome,codigo_individual,pode_gerenciar,funcao,crianca,ordem&order=ordem.asc,nome.asc`,
+    { headers, cache: "no-store" },
+  ).catch(() => null);
+  if (!grupoResponse?.ok) return convite;
+  const grupo = await grupoResponse.json() as ConvidadoGrupoSeguro[];
+  const dadosPorId = new Map(grupo.map((convidado) => [convidado.id, convidado]));
+  const convidadosAtuais = Array.isArray(convite.convidados)
+    ? convite.convidados
+    : [];
+  const convidados = convidadosAtuais.length
+    ? convidadosAtuais.map((convidado) => ({
+        ...convidado,
+        ...(dadosPorId.get(convidado.id) ?? {}),
+      }))
+    : grupo;
+
+  return {
+    ...convite,
+    pode_gerenciar: Boolean(pessoa.pode_gerenciar),
+    convidados,
+  };
 }
 async function sessaoAdministrativa(request:NextRequest){
   const token=request.cookies.get("sessao_noivos")?.value;
@@ -106,18 +155,31 @@ function sanitizarFuncoesDoConvite(
       String(convidado.codigo_individual ?? "").trim().toUpperCase() === codigo,
   );
   const podeGerenciarCriancas = Boolean(
-    pessoa?.pode_gerenciar && !pessoa.crianca,
+    pessoa &&
+      (pessoa.pode_gerenciar || convite.pode_gerenciar) &&
+      !ehCriancaDoCortejo({
+        funcao: pessoa.funcao ?? null,
+        crianca: Boolean(pessoa.crianca),
+      }),
   );
   const idsComFuncaoLiberada = new Set<string>();
   if (pessoa?.id) idsComFuncaoLiberada.add(pessoa.id);
   if (podeGerenciarCriancas) {
     convidados.forEach((convidado) => {
-      if (convidado.crianca && String(convidado.funcao ?? "").trim())
+      if (
+        ehCriancaDoCortejo({
+          funcao: convidado.funcao ?? null,
+          crianca: Boolean(convidado.crianca),
+        }) &&
+        String(convidado.funcao ?? "").trim()
+      )
         idsComFuncaoLiberada.add(convidado.id);
     });
   }
 
-  const podeVerCodigosDoGrupo = Boolean(pessoa?.pode_gerenciar);
+  const podeVerCodigosDoGrupo = Boolean(
+    pessoa && (pessoa.pode_gerenciar || convite.pode_gerenciar),
+  );
   const convidadosProtegidos = convidados.map((convidado) => ({
     ...convidado,
     funcao: idsComFuncaoLiberada.has(convidado.id)
@@ -139,7 +201,7 @@ function sanitizarFuncoesDoConvite(
     ...convite,
     funcao_cortejo: pessoa?.funcao ?? null,
     manuais: [],
-    pode_gerenciar: Boolean(pessoa?.pode_gerenciar),
+    pode_gerenciar: podeVerCodigosDoGrupo,
     convidados: convidadosProtegidos,
     responsaveis: responsaveisProtegidos,
   };
@@ -245,7 +307,14 @@ export async function POST(request: NextRequest) {
     if (!response.ok) return NextResponse.json({ error: "Não foi possível consultar o convite." }, { status: 502 });
     const conviteBruto = await response.json() as ConviteRpc | null;
     if (!conviteBruto) return NextResponse.json({ error: "Código não encontrado." }, { status: 404 });
-    const convite = sanitizarFuncoesDoConvite(conviteBruto, codigo as string);
+    const conviteCompleto = await enriquecerFuncoesDoGrupo(
+      conviteBruto,
+      codigo as string,
+    );
+    const convite = sanitizarFuncoesDoConvite(
+      conviteCompleto,
+      codigo as string,
+    );
     const giftsResponse=await rpc("listar_presentes",{});
     return NextResponse.json({convite,presentes:giftsResponse?.ok?await giftsResponse.json():[],mercado_pago_disponivel:await mercadoPagoDisponivel()});
   }

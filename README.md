@@ -1,90 +1,40 @@
-# Gabriel & Alanna — site do casamento
+# Site de casamento — Gabriel e Alanna
 
-Aplicação pública e administrativa para convites individuais e de grupo,
-confirmação de presença, cortejo, lista de presentes, pagamentos e gestão do
-evento.
+Aplicação Next.js com Supabase e Mercado Pago, preparada para GitHub e Vercel.
 
-## Áreas da aplicação
+## Desenvolvimento local
 
-- `/` — página pública e entrada por código;
-- `/c/CODIGO` — convite individual;
-- `/g/CODIGO` — convite de grupo em modo de consulta;
-- `/x` — acesso da organização por usuário ou código (o primeiro cadastro é
-  reservado ao administrador principal);
-- `/politica-de-privacidade` — política usada no consentimento de CPF.
-
-Os perfis de organização (`administrador`, `noivo`, `noiva` e `assessoria`)
-ficam separados dos convidados. Apenas um código individual marcado como
-responsável pode confirmar presenças ou adicionar crianças ao grupo.
-
-## Variáveis de ambiente
-
-Configure no ambiente de hospedagem, sem gravar valores no repositório:
-
-```text
-SUPABASE_URL=
-SUPABASE_PUBLISHABLE_KEY=
-SUPABASE_SECRET_KEY=
-ADMIN_SETUP_KEY=
-MP_CREDENTIAL_ENCRYPTION_KEY=
-```
-
-`ADMIN_SETUP_KEY` protege exclusivamente a criação da primeira senha do usuário
-`admin`. Use um valor longo e aleatório. `MP_CREDENTIAL_ENCRYPTION_KEY` protege
-o Access Token do Mercado Pago e os CPFs armazenados.
-
-## Banco de dados
-
-Para um banco novo, execute no SQL Editor do Supabase:
-
-```text
-supabase/INSTALACAO_COMPLETA_BANCO_NOVO.sql
-```
-
-Para atualizar uma instalação que já recebeu as migrações anteriores, execute:
-
-```text
-supabase/migration_033_revisao_geral_perfis_notificacoes.sql
-supabase/migration_034_codigos_organizacao_login.sql
-supabase/migration_035_grupos_integrados_convidados.sql
-supabase/migration_036_modelos_duplicidades_gestao_presentes.sql
-supabase/migration_037_edicao_presentes_entregas_ilimitados.sql
-supabase/migration_038_funcoes_individuais_manuais_criancas.sql
-```
-
-As migrações 033 a 038 corrigem permissões dos perfis, confirmação por
-responsável, sessões de logout, redefinição temporária de senha, notificações,
-proteção dos códigos individuais, códigos da organização, grupos integrados,
-duplicidades na importação e cadastro/remoção manual de presentes. Novas senhas
-temporárias têm oito dígitos, e os acessos antigos de seis dígitos continuam
-aceitos até a troca obrigatória. A instalação completa já contém todas essas
-migrações. A migração 037 também habilita edição completa dos presentes,
-quantidade ilimitada, status de entrega física e o código do presenteador nos
-pagamentos. A migração 038 restringe a função a cada convidado, libera as
-funções infantis somente à própria criança e a seus responsáveis e associa os
-manuais corretos a cada acesso.
-
-## Desenvolvimento e validação
-
-Requer Node.js 22.13 ou superior.
+Requer Node.js 22.
 
 ```bash
 npm ci
+cp .env.example .env.local
+npm run dev
+```
+
+Preencha `.env.local` com as credenciais do seu ambiente. Esse arquivo não
+deve ser enviado ao GitHub.
+
+## Validação
+
+```bash
 npm run lint
 npm test
+npm run build
 ```
 
-`npm test` gera o artefato de produção do Next.js e executa os testes de
-renderização, permissões de função, responsáveis e manuais.
+## Banco de dados
 
-## Pagamentos
+- Banco novo: execute somente
+  `supabase/INSTALACAO_COMPLETA_BANCO_NOVO.sql`.
+- Banco existente: execute apenas as migrações ainda não aplicadas, em ordem
+  numérica.
+- Para ativar a versão mais recente de “Minha função”, execute as migrações
+  `038` e `039`, nessa ordem, caso ainda não tenham sido aplicadas.
 
-As credenciais do Mercado Pago são informadas somente no painel administrativo
-e cifradas no banco. O webhook deve apontar para:
+A expiração de reservas é executada pelo Supabase Cron, configurado pela
+migração 032. Este pacote não cria um Cron adicional na Vercel.
 
-```text
-https://SEU-DOMINIO/api/mercado-pago/webhook
-```
+## Publicação
 
-Reservas pendentes são conciliadas pelo Supabase Cron; boletos permanecem
-pendentes até compensação ou atualização do provedor.
+Consulte [GUIA_PUBLICACAO.md](./GUIA_PUBLICACAO.md).

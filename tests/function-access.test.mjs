@@ -25,7 +25,15 @@ const pessoas = [
     nome: "Pessoa gestora",
     codigo_individual: "GEST01",
     pode_gerenciar: true,
-    funcao: "Madrinha",
+    funcao: "Padrinho",
+    crianca: false,
+  },
+  {
+    id: "adulto-responsavel",
+    nome: "Pessoa responsável sem função",
+    codigo_individual: "RESP01",
+    pode_gerenciar: false,
+    funcao: null,
     crianca: false,
   },
   {
@@ -42,7 +50,7 @@ const pessoas = [
     codigo_individual: "CRIA01",
     pode_gerenciar: false,
     funcao: "Porta-aliança",
-    crianca: true,
+    crianca: false,
   },
   {
     id: "crianca-2",
@@ -76,6 +84,20 @@ test("gestor vê sua função primeiro e depois as crianças do cortejo", async 
   assert.match(fraseMeuPapel(acesso), /responsável por criança do cortejo/i);
 });
 
+test("responsável sem função vê a criança quando o convite concede gestão", async () => {
+  const { fraseMeuPapel, resolverAcessoFuncoes } = await carregarFuncoes();
+  const acesso = resolverAcessoFuncoes("RESP01", pessoas, true);
+
+  assert.equal(acesso.funcaoPropria, null);
+  assert.equal(acesso.responsavelPorCrianca, true);
+  assert.deepEqual(
+    acesso.criancasGerenciadas.map((pessoa) => pessoa.id),
+    ["crianca-1"],
+  );
+  assert.deepEqual(acesso.manuais, ["criancas"]);
+  assert.match(fraseMeuPapel(acesso), /^Você é responsável/i);
+});
+
 test("criança vê apenas a própria função e o próprio manual", async () => {
   const { resolverAcessoFuncoes } = await carregarFuncoes();
   const acesso = resolverAcessoFuncoes("CRIA01", pessoas);
@@ -95,12 +117,18 @@ test("código geral do grupo não expõe funções pessoais", async () => {
   assert.deepEqual(acesso.manuais, []);
 });
 
-test("mantém proteção na API, migração final e os quatro PDFs", async () => {
-  const [api, migration, completeSql, component, ...pdfStats] = await Promise.all([
+test("mantém proteção, ordem da página, PDFs e desenhos dos trajes", async () => {
+  const [
+    api,
+    migration,
+    completeSql,
+    component,
+    ...assetStats
+  ] = await Promise.all([
     readFile(new URL("../app/api/convite/route.ts", import.meta.url), "utf8"),
     readFile(
       new URL(
-        "../supabase/migration_038_funcoes_individuais_manuais_criancas.sql",
+        "../supabase/migration_039_responsaveis_criancas_trajes.sql",
         import.meta.url,
       ),
       "utf8",
@@ -114,17 +142,28 @@ test("mantém proteção na API, migração final e os quatro PDFs", async () =>
     stat(new URL("../public/manuais/manual-das-demoiselles.pdf", import.meta.url)),
     stat(new URL("../public/manuais/manual-do-amigo-do-noivo.pdf", import.meta.url)),
     stat(new URL("../public/manuais/manual-das-criancas.pdf", import.meta.url)),
+    stat(new URL("../public/trajes/traje-padrinho.webp", import.meta.url)),
+    stat(new URL("../public/trajes/traje-madrinha.webp", import.meta.url)),
+    stat(new URL("../public/trajes/traje-demoiselle.webp", import.meta.url)),
+    stat(new URL("../public/trajes/traje-amigo-noivo.webp", import.meta.url)),
+    stat(new URL("../public/trajes/traje-criancas.webp", import.meta.url)),
   ]);
 
   assert.match(api, /sanitizarFuncoesDoConvite/);
   assert.match(api, /idsComFuncaoLiberada/);
+  assert.match(api, /convite\.pode_gerenciar/);
   assert.match(migration, /v_pode_gerenciar_criancas/);
-  assert.match(migration, /'funcao', null/);
+  assert.match(migration, /funcao_cortejo_infantil/);
   assert.ok(
-    completeSql.indexOf("migration_038_funcoes_individuais_manuais_criancas.sql") >
-      completeSql.indexOf("migration_037_edicao_presentes_entregas_ilimitados.sql"),
+    completeSql.indexOf("migration_039_responsaveis_criancas_trajes.sql") >
+      completeSql.indexOf("migration_038_funcoes_individuais_manuais_criancas.sql"),
   );
   assert.match(component, /Responsável por criança do cortejo/);
+  assert.match(component, /Desenho de referência do manual/);
   assert.match(component, /Baixar \{manual\.titulo\} \(PDF\)/);
-  pdfStats.forEach((arquivo) => assert.ok(arquivo.size > 100_000));
+  assert.ok(
+    component.indexOf("<h2>Baixar manuais</h2>") <
+      component.indexOf("<h2>Informações da sua função</h2>"),
+  );
+  assetStats.forEach((arquivo) => assert.ok(arquivo.size > 50_000));
 });
