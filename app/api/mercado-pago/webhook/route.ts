@@ -2,43 +2,21 @@ import { NextRequest, NextResponse } from "next/server";
 import { createDecipheriv, createHash } from "node:crypto";
 
 const supabaseUrl = process.env.SUPABASE_URL;
-const secret = process.env.SUPABASE_SECRET_KEY;
+const supabaseKey = process.env.SUPABASE_SECRET_KEY;
 const encryptionKey = process.env.MP_CREDENTIAL_ENCRYPTION_KEY;
 
 const headers = () => ({
-  apikey: secret!,
-  Authorization: `Bearer ${secret}`,
+  apikey: supabaseKey!,
+  Authorization: `Bearer ${supabaseKey}`,
   "Content-Type": "application/json",
 });
-
-type NotificacaoPagamento = {
-  type?: string;
-  topic?: string;
-  data?: { id?: string | number };
-};
-
-type PagamentoMercadoPago = {
-  id: number;
-  status: string;
-  external_reference?: string;
-  transaction_amount?: number;
-  payment_method_id?: string;
-  payment_type_id?: string;
-  date_of_expiration?: string;
-  metadata?: { codigo_convidado?: string };
-  payer?: {
-    email?: string;
-    first_name?: string;
-    last_name?: string;
-  };
-};
 
 async function registrarFalha(
   pagamentoId: string | null,
   etapa: string,
   mensagem: string,
 ) {
-  if (!supabaseUrl || !secret) return;
+  if (!supabaseUrl || !supabaseKey) return;
   await fetch(`${supabaseUrl}/rest/v1/falhas_webhook_pagamento`, {
     method: "POST",
     headers: headers(),
@@ -53,6 +31,7 @@ async function registrarFalha(
 function decrypt(value: string) {
   if (!encryptionKey) throw new Error("Chave de proteção não configurada");
   const [iv, tag, data] = value.split(".");
+  if (!iv || !tag || !data) throw new Error("Credencial protegida inválida");
   const key = createHash("sha256").update(encryptionKey).digest();
   const decipher = createDecipheriv(
     "aes-256-gcm",
@@ -66,196 +45,194 @@ function decrypt(value: string) {
   ]).toString("utf8");
 }
 
-async function corpoOpcional(request: NextRequest) {
-  try {
-    return (await request.json()) as NotificacaoPagamento;
-  } catch {
-    return {} as NotificacaoPagamento;
-  }
-}
+type Notificacao = {
+  type?: string;
+  action?: string;
+  id?: string | number;
+  data?: { id?: string | number };
+};
 
-function identificarNotificacao(
-  request: NextRequest,
-  body: NotificacaoPagamento,
-) {
-  const url = new URL(request.url);
-  const tipo = body.type || body.topic || url.searchParams.get("type") || url.searchParams.get("topic");
-  const id =
-    body.data?.id ||
-    url.searchParams.get("data.id") ||
-    url.searchParams.get("id");
-  return {
-    tipo: String(tipo || "").toLowerCase(),
-    id: id == null ? "" : String(id),
+type PagamentoMercadoPago = {
+  id: number;
+  status: string;
+  external_reference?: string;
+  transaction_amount?: number;
+  payment_method_id?: string;
+  payment_type_id?: string;
+  date_of_expiration?: string;
+  payer?: {
+    email?: string;
+    first_name?: string;
+    last_name?: string;
   };
-}
-
-function statusDaReserva(pagamento: PagamentoMercadoPago) {
-  const boleto =
-    pagamento.payment_type_id === "ticket" ||
-    pagamento.payment_method_id === "bolbradesco" ||
-    pagamento.payment_method_id === "pec";
-  if (pagamento.status === "approved") return "confirmado";
-  if (pagamento.status === "refunded") return "reembolsado";
-  if (
-    boleto &&
-    (pagamento.status === "rejected" || pagamento.status === "cancelled")
-  )
-    return "cancelado";
-  return "pendente";
-}
+};
 
 export async function POST(request: NextRequest) {
-  const body = await corpoOpcional(request);
-  const notificacao = identificarNotificacao(request, body);
-  if (notificacao.tipo !== "payment" || !notificacao.id)
-    return NextResponse.json({ ok: true, ignorada: true });
-
-  if (!supabaseUrl || !secret) {
-    await registrarFalha(
-      notificacao.id,
-      "configuracao",
-      "Supabase não configurado no ambiente do webhook",
-    );
-    return NextResponse.json({ ok: false }, { status: 503 });
-  }
-
+  let pagamentoId: string | null = null;
   try {
-    const configResponse = await fetch(
+    if (!supabaseUrl || !supabaseKey || !encryptionKey)
+      return NextResponse.json(
+        { ok: false, error: "Integração não configurada." },
+        { status: 503 },
+      );
+
+    const payload = (await request.json().catch(() => ({}))) as Notificacao;
+    const parametros = new URL(request.url).searchParams;
+    const tipo = payload.type ?? parametros.get("type") ?? undefined;
+    const idRecebido =
+      payload.data?.id ?? payload.id ?? parametros.get("data.id") ?? undefined;
+
+    // Outros tipos de notificação não pertencem ao fluxo de pagamentos.
+    if (tipo !== "payment" || idRecebido === undefined)
+      return NextResponse.json({ ok: true, ignorada: true });
+
+    pagamentoId = String(idRecebido);
+    const configuracaoResponse = await fetch(
       `${supabaseUrl}/rest/v1/integracoes_pagamento?id=eq.1&ativa=eq.true&select=access_token_cifrado`,
       { headers: headers(), cache: "no-store" },
     );
-    if (!configResponse.ok) {
+    if (!configuracaoResponse.ok) {
       await registrarFalha(
-        notificacao.id,
-        "configuracao",
-        `Consulta da integração retornou HTTP ${configResponse.status}`,
+        pagamentoId,
+        "consulta_configuracao",
+        `HTTP ${configuracaoResponse.status}`,
       );
-      return NextResponse.json({ ok: false }, { status: 503 });
+      return NextResponse.json(
+        { ok: false, error: "Configuração indisponível." },
+        { status: 502 },
+      );
     }
-    const configuracao = (await configResponse.json())[0] as
+
+    const configuracao = (await configuracaoResponse.json())?.[0] as
       | { access_token_cifrado?: string }
       | undefined;
     if (!configuracao?.access_token_cifrado) {
       await registrarFalha(
-        notificacao.id,
-        "configuracao",
-        "Integração do Mercado Pago ausente ou desativada",
+        pagamentoId,
+        "consulta_configuracao",
+        "Integração ativa sem credencial disponível",
       );
-      return NextResponse.json({ ok: false }, { status: 503 });
+      return NextResponse.json(
+        { ok: false, error: "Integração indisponível." },
+        { status: 503 },
+      );
     }
 
     const token = decrypt(configuracao.access_token_cifrado);
-    const paymentResponse = await fetch(
-      `https://api.mercadopago.com/v1/payments/${encodeURIComponent(notificacao.id)}`,
+    const pagamentoResponse = await fetch(
+      `https://api.mercadopago.com/v1/payments/${encodeURIComponent(pagamentoId)}`,
       {
         headers: { Authorization: `Bearer ${token}` },
         cache: "no-store",
       },
     );
-    if (!paymentResponse.ok) {
+    if (!pagamentoResponse.ok) {
       await registrarFalha(
-        notificacao.id,
+        pagamentoId,
         "consulta_mercado_pago",
-        `HTTP ${paymentResponse.status}`,
+        `HTTP ${pagamentoResponse.status}`,
       );
-      return NextResponse.json({ ok: false }, { status: 502 });
+      return NextResponse.json(
+        { ok: false, error: "Pagamento ainda não pôde ser consultado." },
+        { status: 502 },
+      );
     }
 
-    const pagamento = (await paymentResponse.json()) as PagamentoMercadoPago;
+    const pagamento = (await pagamentoResponse.json()) as PagamentoMercadoPago;
     if (!pagamento.external_reference) {
       await registrarFalha(
-        String(pagamento.id),
-        "referencia",
+        pagamentoId,
+        "conciliacao",
         "Pagamento sem external_reference",
       );
-      return NextResponse.json({ ok: false }, { status: 422 });
+      return NextResponse.json(
+        { ok: false, error: "Pagamento sem referência de conciliação." },
+        { status: 422 },
+      );
     }
 
     const boleto =
       pagamento.payment_type_id === "ticket" ||
       pagamento.payment_method_id === "bolbradesco" ||
       pagamento.payment_method_id === "pec";
-    const pagadorNome = [
-      pagamento.payer?.first_name,
-      pagamento.payer?.last_name,
-    ]
-      .filter(Boolean)
-      .join(" ") || null;
-    const codigoConvidado = String(
-      pagamento.metadata?.codigo_convidado ?? "",
-    )
-      .trim()
-      .toUpperCase();
-    const dadosBase = {
-      status: statusDaReserva(pagamento),
-      pagamento_id: String(pagamento.id),
-      pagamento_status: pagamento.status,
-      pagador_nome: pagadorNome,
-      pagador_email: pagamento.payer?.email ?? null,
-      meio_pagamento_detalhe:
-        pagamento.payment_method_id || pagamento.payment_type_id || null,
-      tipo_pagamento: pagamento.payment_type_id ?? null,
-      boleto_vencimento:
-        boleto && pagamento.date_of_expiration
-          ? pagamento.date_of_expiration
-          : null,
-      valor_transacao: pagamento.transaction_amount ?? null,
-      aprovado_em:
-        pagamento.status === "approved" ? new Date().toISOString() : null,
-      reembolsado_em:
-        pagamento.status === "refunded" ? new Date().toISOString() : null,
-      atualizado_em: new Date().toISOString(),
-    };
+    const status =
+      pagamento.status === "approved"
+        ? "confirmado"
+        : pagamento.status === "refunded"
+          ? "reembolsado"
+          : boleto &&
+              (pagamento.status === "rejected" ||
+                pagamento.status === "cancelled")
+            ? "cancelado"
+            : "pendente";
+    const pagadorNome =
+      [pagamento.payer?.first_name, pagamento.payer?.last_name]
+        .filter(Boolean)
+        .join(" ") || null;
+    const agora = new Date().toISOString();
+    const atualizacaoResponse = await fetch(
+      `${supabaseUrl}/rest/v1/reservas_presentes?external_reference=eq.${encodeURIComponent(pagamento.external_reference)}&meio=eq.mercado_pago&select=id`,
+      {
+        method: "PATCH",
+        headers: { ...headers(), Prefer: "return=representation" },
+        body: JSON.stringify({
+          status,
+          pagamento_id: String(pagamento.id),
+          pagamento_status: pagamento.status,
+          pagador_nome: pagadorNome,
+          pagador_email: pagamento.payer?.email ?? null,
+          meio_pagamento_detalhe:
+            pagamento.payment_method_id || pagamento.payment_type_id || null,
+          tipo_pagamento: pagamento.payment_type_id ?? null,
+          boleto_vencimento:
+            boleto && pagamento.date_of_expiration
+              ? pagamento.date_of_expiration
+              : null,
+          valor_transacao: pagamento.transaction_amount ?? null,
+          aprovado_em: pagamento.status === "approved" ? agora : null,
+          reembolsado_em: pagamento.status === "refunded" ? agora : null,
+          atualizado_em: agora,
+        }),
+      },
+    );
 
-    const atualizar = (dados: Record<string, unknown>) =>
-      fetch(
-        `${supabaseUrl}/rest/v1/reservas_presentes?external_reference=eq.${encodeURIComponent(pagamento.external_reference!)}&meio=eq.mercado_pago`,
-        {
-          method: "PATCH",
-          headers: { ...headers(), Prefer: "return=representation" },
-          body: JSON.stringify(dados),
-          cache: "no-store",
-        },
-      );
-
-    let atualizado = await atualizar({
-      ...dadosBase,
-      ...(/^[A-Z0-9]{6}$/.test(codigoConvidado)
-        ? { codigo_doador: codigoConvidado }
-        : {}),
-    });
-    if (!atualizado.ok && /^[A-Z0-9]{6}$/.test(codigoConvidado)) {
-      // Bancos que ainda não receberam a coluna codigo_doador continuam
-      // processando o pagamento; a migração mais recente fará o backfill.
-      atualizado = await atualizar(dadosBase);
-    }
-    if (!atualizado.ok) {
+    if (!atualizacaoResponse.ok) {
       await registrarFalha(
-        String(pagamento.id),
+        pagamentoId,
         "atualizacao_banco",
-        `HTTP ${atualizado.status}`,
+        `HTTP ${atualizacaoResponse.status}`,
       );
-      return NextResponse.json({ ok: false }, { status: 500 });
+      return NextResponse.json(
+        { ok: false, error: "Não foi possível atualizar o pagamento." },
+        { status: 502 },
+      );
     }
 
-    const registros = (await atualizado.json()) as unknown[];
-    if (!Array.isArray(registros) || registros.length === 0) {
+    const atualizados = (await atualizacaoResponse.json()) as Array<{
+      id: string;
+    }>;
+    if (!Array.isArray(atualizados) || atualizados.length === 0) {
       await registrarFalha(
-        String(pagamento.id),
-        "reserva_nao_encontrada",
-        `Nenhuma reserva encontrada para external_reference ${pagamento.external_reference}`,
+        pagamentoId,
+        "conciliacao",
+        `Nenhuma reserva encontrada para ${pagamento.external_reference}`,
       );
-      return NextResponse.json({ ok: false }, { status: 409 });
+      return NextResponse.json(
+        { ok: false, error: "Nenhuma reserva correspondente foi encontrada." },
+        { status: 404 },
+      );
     }
 
-    return NextResponse.json({ ok: true, atualizados: registros.length });
+    return NextResponse.json({ ok: true, atualizados: atualizados.length });
   } catch (erro) {
     await registrarFalha(
-      notificacao.id,
+      pagamentoId,
       "processamento",
       erro instanceof Error ? erro.message : "Erro inesperado",
     );
-    return NextResponse.json({ ok: false }, { status: 500 });
+    return NextResponse.json(
+      { ok: false, error: "Falha temporária ao processar a notificação." },
+      { status: 500 },
+    );
   }
 }

@@ -90,11 +90,14 @@ type Organizacao = {
   nome: string;
   usuario: string;
   codigo: string | null;
-  funcao: "administrador" | "noivo" | "noiva" | "assessoria";
+  funcao: string;
   administrador: boolean;
   principal: boolean;
   senha_criada: boolean;
   exige_troca_senha: boolean;
+  perfil_acesso?: "admin" | "noivos" | "assessoria" | "organizacao";
+  pode_editar?: boolean;
+  pode_excluir?: boolean;
 };
 type PresenteAdmin = {
   id: string;
@@ -159,8 +162,21 @@ const FUNCOES = [
   "Pai da Noiva",
   "Mãe da Noiva",
 ];
+const FUNCOES_ORGANIZACAO = [
+  "Assessoria",
+  "Fotógrafo",
+  "Film maker",
+  "Filmagem",
+  "Apoio",
+  "Pai do Noivo",
+  "Mãe do Noivo",
+  "Pai da Noiva",
+  "Mãe da Noiva",
+  "Noivo",
+  "Noiva",
+];
 export type Dashboard = {
-  perfil: "noivos" | "assessoria" | "admin";
+  perfil: "noivos" | "assessoria" | "organizacao" | "admin";
   conta: {
     id: string;
     nome: string;
@@ -191,6 +207,13 @@ export type Dashboard = {
     atualizado_em: string;
   }>;
 };
+
+function tituloDoPerfil(perfil: Dashboard["perfil"]) {
+  if (perfil === "admin") return "Área do Administrador";
+  if (perfil === "noivos") return "Área dos Noivos";
+  if (perfil === "assessoria") return "Área da Assessoria";
+  return "Área da Organização";
+}
 
 function baixarCsv(
   nome: string,
@@ -383,6 +406,7 @@ export function DashboardNoivos({
       | "convidados"
       | "mensagens"
       | "notificacoes"
+      | "cortejo"
       | "presentes"
       | "organizacao"
       | "evento"
@@ -425,7 +449,7 @@ export function DashboardNoivos({
     [orgNome, setOrgNome] = useState(""),
     [orgUsuario, setOrgUsuario] = useState(""),
     [orgCodigo, setOrgCodigo] = useState(""),
-    [orgFuncao, setOrgFuncao] = useState<Organizacao["funcao"]>("assessoria"),
+    [orgFuncao, setOrgFuncao] = useState("Assessoria"),
     [orgAdmin, setOrgAdmin] = useState(false),
     [credenciaisGeradas, setCredenciaisGeradas] = useState<{
       codigo?: string;
@@ -494,7 +518,11 @@ export function DashboardNoivos({
     },
   );
   const assessoria = dados.perfil === "assessoria";
+  const organizacaoRestrita = dados.perfil === "organizacao";
+  const perfilRestrito = assessoria || organizacaoRestrita;
   const admin = dados.perfil === "admin";
+  const noivos = dados.perfil === "noivos";
+  const podeGerirOrganizacao = admin || noivos || assessoria;
   const grupos = useMemo(
     () =>
       dados.grupos?.length
@@ -540,6 +568,19 @@ export function DashboardNoivos({
       normalizar(`${item.codigo} ${item.titulo}`).includes(termo),
     );
   }, [grupos, pesquisaGrupos]);
+  const pessoasDoCortejo = useMemo(
+    () =>
+      dados.convidados
+        .filter(
+          (pessoa) =>
+            Boolean(pessoa.funcao?.trim()) &&
+            normalizar(pessoa.funcao ?? "") !== "convidado",
+        )
+        .sort((a, b) =>
+          `${a.funcao} ${a.nome}`.localeCompare(`${b.funcao} ${b.nome}`, "pt-BR"),
+        ),
+    [dados.convidados],
+  );
   const lista =
     filtro === "sim"
       ? dados.convidados.filter((p) => p.resposta === "sim")
@@ -996,6 +1037,7 @@ export function DashboardNoivos({
     }
     setMp(d.configuracao);
     setPagamentos(d.pagamentos ?? []);
+    if (d.aviso) setAviso(d.aviso);
     setMpPublicKey(d.configuracao?.public_key ?? "");
     setMpAmbiente(d.configuracao?.ambiente === "teste" ? "teste" : "producao");
     setRecolherCpf(Boolean(d.configuracao?.recolher_cpf));
@@ -1925,6 +1967,65 @@ export function DashboardNoivos({
       </div>
     );
 
+  if (pagina === "cortejo")
+    return (
+      <div className="panel admin-page procession-page">
+        <button className="back-link" onClick={() => setPagina("geral")}>
+          ← Voltar à visão geral
+        </button>
+        <p className="eyebrow">{tituloDoPerfil(dados.perfil)}</p>
+        <h1>Visão do cortejo</h1>
+        <p>
+          Relação das pessoas com função no casamento e a situação atual da
+          confirmação de presença.
+        </p>
+        <div className="procession-summary">
+          <span>
+            <b>{pessoasDoCortejo.length}</b>
+            <small>Pessoas no cortejo</small>
+          </span>
+          <span>
+            <b>{pessoasDoCortejo.filter((p) => p.resposta === "sim").length}</b>
+            <small>Confirmadas</small>
+          </span>
+          <span>
+            <b>{pessoasDoCortejo.filter((p) => p.resposta !== "sim").length}</b>
+            <small>Sem confirmação positiva</small>
+          </span>
+        </div>
+        <div className="procession-list">
+          {pessoasDoCortejo.map((pessoa) => (
+            <article key={pessoa.id}>
+              <div>
+                <b>{pessoa.nome}</b>
+                <small>
+                  {pessoa.funcao} · {pessoa.conjunto}
+                </small>
+              </div>
+              <span
+                className={`attendance-status ${
+                  pessoa.resposta === "sim"
+                    ? "confirmed"
+                    : pessoa.resposta === "nao"
+                      ? "declined"
+                      : "waiting"
+                }`}
+              >
+                {pessoa.resposta === "sim"
+                  ? "Presença confirmada"
+                  : pessoa.resposta === "nao"
+                    ? "Não poderá ir"
+                    : "Aguardando resposta"}
+              </span>
+            </article>
+          ))}
+          {!pessoasDoCortejo.length && (
+            <div className="empty-state">Nenhuma função do cortejo cadastrada.</div>
+          )}
+        </div>
+      </div>
+    );
+
   if (pagina === "exportar")
     return (
       <>
@@ -2468,8 +2569,9 @@ export function DashboardNoivos({
           </label>
           <small>
             Ao ativar e salvar, o nome do espaço, o endereço e o Google Maps
-            ficarão visíveis no convite e na página inicial para todos. Enquanto
-            estiver desativado, será exibido “Endereço: Aguardando a liberação”.
+            ficarão visíveis somente nas áreas internas, depois do acesso por
+            código ou login. A página pública continuará mostrando apenas data,
+            horário e cidade.
           </small>
           <button className="primary">Salvar informações</button>
         </form>
@@ -2481,19 +2583,19 @@ export function DashboardNoivos({
       </div>
     );
 
-  if (pagina === "organizacao" && admin)
+  if (pagina === "organizacao")
     return (
       <div className="panel admin-page">
         <button className="back-link" onClick={() => setPagina("geral")}>
           ← Voltar à visão geral
         </button>
-        <p className="eyebrow">Administração</p>
+        <p className="eyebrow">{tituloDoPerfil(dados.perfil)}</p>
         <h1>Organização</h1>
         <p>
-          Noivos, assessoria e administradores ficam separados da lista de
-          convidados.
+          Noivos, pais, assessoria e equipe do evento ficam separados da lista
+          de convidados. As funções podem ser personalizadas.
         </p>
-        {admin && (
+        {podeGerirOrganizacao && (
           <form
             className="admin-form organization-form"
             onSubmit={async (e) => {
@@ -2506,7 +2608,7 @@ export function DashboardNoivos({
                   usuario: orgUsuario,
                   codigo: orgCodigo || null,
                   funcao: orgFuncao,
-                  administrador: orgAdmin,
+                  administrador: admin ? orgAdmin : false,
                 },
               );
               if (ok) {
@@ -2514,7 +2616,7 @@ export function DashboardNoivos({
                 setOrgNome("");
                 setOrgUsuario("");
                 setOrgCodigo("");
-                setOrgFuncao("assessoria");
+                setOrgFuncao("Assessoria");
                 setOrgAdmin(false);
               }
             }}
@@ -2563,25 +2665,38 @@ export function DashboardNoivos({
                 disponível antes de salvar.
               </small>
             </label>
-            <select
-              value={orgFuncao}
-              onChange={(e) =>
-                setOrgFuncao(e.target.value as Organizacao["funcao"])
-              }
-            >
-              <option value="noivo">Noivo</option>
-              <option value="noiva">Noiva</option>
-              <option value="assessoria">Assessoria</option>
-              <option value="administrador">Administrador</option>
-            </select>
-            <label className="organization-checkbox">
+            <label>
+              Função
               <input
-                type="checkbox"
-                checked={orgAdmin}
-                onChange={(e) => setOrgAdmin(e.target.checked)}
-              />{" "}
-              Poderes administrativos
+                list="funcoes-organizacao"
+                value={orgFuncao}
+                onChange={(e) => setOrgFuncao(e.target.value.slice(0, 80))}
+                placeholder="Escolha ou digite uma nova função"
+                maxLength={80}
+                required
+              />
+              <datalist id="funcoes-organizacao">
+                {FUNCOES_ORGANIZACAO.filter(
+                  (item) => admin || !["Noivo", "Noiva"].includes(item),
+                ).map((item) => (
+                  <option key={item} value={item} />
+                ))}
+              </datalist>
+              <small>
+                Sugestões: fotógrafo, film maker, filmagem e apoio. Você também
+                pode digitar uma nova função.
+              </small>
             </label>
+            {admin && (
+              <label className="organization-checkbox">
+                <input
+                  type="checkbox"
+                  checked={orgAdmin}
+                  onChange={(e) => setOrgAdmin(e.target.checked)}
+                />{" "}
+                Poderes administrativos
+              </label>
+            )}
             <button className="primary">
               {orgEditando ? "Salvar" : "Criar usuário"}
             </button>
@@ -2618,7 +2733,7 @@ export function DashboardNoivos({
                 </small>
               </div>
               <div className="expiry-actions">
-                {admin && !o.principal && (
+                {!o.principal && (o.pode_editar ?? admin) && (
                   <>
                     <button
                       onClick={() => {
@@ -2655,6 +2770,18 @@ export function DashboardNoivos({
                       Definir senha
                     </button>
                   </>
+                )}
+                {!o.principal && (o.pode_excluir ?? admin) && (
+                  <button
+                    className="danger"
+                    onClick={() =>
+                      confirm(
+                        `Apagar ${o.nome} da organização? O acesso dessa pessoa será encerrado.`,
+                      ) && administrarOrganizacao("excluir", { id: o.id })
+                    }
+                  >
+                    Apagar
+                  </button>
                 )}
                 {o.principal && <small>Administrador principal</small>}
               </div>
@@ -3157,24 +3284,24 @@ export function DashboardNoivos({
   ] as const;
   return (
     <div className="panel dashboard">
-      <p className="eyebrow">
-        {admin
-          ? "Área do Administrador"
-          : assessoria
-            ? "Área da Assessoria"
-            : "Área dos Noivos"}
-      </p>
+      <p className="eyebrow">{tituloDoPerfil(dados.perfil)}</p>
       <h1>Visão geral dos convidados</h1>
       <div className="dashboard-nav">
-        <button className="primary" onClick={() => setPagina("convidados")}>
-          Lista de convidados
-        </button>
-        {admin && (
-          <button className="secondary" onClick={() => setPagina("organizacao")}>
-            Organização
+        {!organizacaoRestrita && (
+          <button className="primary" onClick={() => setPagina("convidados")}>
+            Lista de convidados
           </button>
         )}
-        {!assessoria && (
+        <button className="secondary" onClick={() => setPagina("cortejo")}>
+          Cortejo
+        </button>
+        <button className="secondary" onClick={() => setPagina("organizacao")}>
+          Organização
+        </button>
+        <a className="secondary dashboard-link" href="/lista">
+          Controle de entrada
+        </a>
+        {!perfilRestrito && (
           <button className="secondary" onClick={() => setPagina("evento")}>
             Data e local
           </button>
@@ -3182,7 +3309,7 @@ export function DashboardNoivos({
         <button className="secondary" onClick={() => setPagina("senha")}>
           Alterar minha senha
         </button>
-        {!assessoria && (
+        {!perfilRestrito && (
           <>
             <button
               className="secondary"
@@ -3239,7 +3366,7 @@ export function DashboardNoivos({
       </div>
       <div className="metric-grid">
         {cards
-          .filter(([, , f]) => !assessoria || f !== "presentes")
+          .filter(([, , f]) => !perfilRestrito || f !== "presentes")
           .map(([l, v, f]) => (
             <button
               key={l}

@@ -7,14 +7,10 @@ const supabaseUrl = process.env.SUPABASE_URL;
 const supabaseKey = process.env.SUPABASE_PUBLISHABLE_KEY;
 const supabaseSecretKey = process.env.SUPABASE_SECRET_KEY;
 const ARGON2_OPTIONS = { m: 19456, t: 2, p: 1, dkLen: 32 } as const;
-const EVENTO_PADRAO = {
+const EVENTO_PUBLICO_PADRAO = {
   data: "2026-10-03",
   hora: "18:30",
   cidade: "Candeias-BA",
-  local_liberado: false,
-  nome_espaco: "Espaço Brunus",
-  endereco: "Rua Dário Sales, 31 - Centro, Candeias-BA, 43.805-000",
-  link_maps: null,
 };
 type PainelAdministrativo = {
   perfil?: string;
@@ -119,27 +115,6 @@ async function mercadoPagoDisponivel(){
   const r=await fetch(`${supabaseUrl}/rest/v1/integracoes_pagamento?id=eq.1&ativa=eq.true&select=id`,{headers:{apikey:supabaseSecretKey,Authorization:`Bearer ${supabaseSecretKey}`},cache:"no-store"});
   return r.ok&&((await r.json()) as unknown[]).length>0;
 }
-async function resolverConviteUnitario(codigoAcesso:string){
-  if(!supabaseUrl||!supabaseSecretKey)return null;
-  const codigo=codigoAcesso.trim().toUpperCase();
-  const h={apikey:supabaseSecretKey,Authorization:`Bearer ${supabaseSecretKey}`};
-  const conviteResponse=await fetch(
-    `${supabaseUrl}/rest/v1/convites?codigo=eq.${encodeURIComponent(codigo)}&ativo=eq.true&select=id&limit=1`,
-    {headers:h,cache:"no-store"},
-  ).catch(()=>null);
-  if(!conviteResponse?.ok)return null;
-  const convite=(await conviteResponse.json() as Array<{id:string}>)[0];
-  if(!convite?.id)return null;
-  const convidadosResponse=await fetch(
-    `${supabaseUrl}/rest/v1/convidados?convite_id=eq.${encodeURIComponent(convite.id)}&select=codigo_individual&order=ordem.asc&limit=2`,
-    {headers:h,cache:"no-store"},
-  ).catch(()=>null);
-  if(!convidadosResponse?.ok)return null;
-  const convidados=await convidadosResponse.json() as Array<{codigo_individual?:string}>;
-  const codigoIndividual=String(convidados[0]?.codigo_individual??"").trim().toUpperCase();
-  return convidados.length===1&&/^[A-Z0-9]{6}$/.test(codigoIndividual)
-    ?codigoIndividual:null;
-}
 const tokenHash=(token:string)=>createHash("sha256").update(token).digest("hex");
 async function criarHashSenha(senha:string){
   const salt = new Uint8Array(randomBytes(16));
@@ -164,7 +139,7 @@ function sanitizarFuncoesDoConvite(
   convite: ConviteRpc,
   codigoAcesso: string,
 ): ConviteRpc {
-  if (["noivos", "assessoria", "admin"].includes(convite.perfil_acesso ?? ""))
+  if (["noivos", "assessoria", "organizacao", "admin"].includes(convite.perfil_acesso ?? ""))
     return convite;
 
   const convidados = Array.isArray(convite.convidados)
@@ -230,9 +205,13 @@ function sanitizarFuncoesDoConvite(
 
 export async function GET() {
   const response=await rpc("evento_publico",{});
-  if(!response?.ok)return NextResponse.json({evento:EVENTO_PADRAO});
-  const evento=await response.json();
-  return NextResponse.json({evento:evento??EVENTO_PADRAO});
+  if(!response?.ok)return NextResponse.json({evento:EVENTO_PUBLICO_PADRAO});
+  const evento=await response.json() as Record<string,unknown>|null;
+  return NextResponse.json({evento:evento?{
+    data:String(evento.data??EVENTO_PUBLICO_PADRAO.data),
+    hora:String(evento.hora??EVENTO_PUBLICO_PADRAO.hora),
+    cidade:String(evento.cidade??EVENTO_PUBLICO_PADRAO.cidade),
+  }:EVENTO_PUBLICO_PADRAO});
 }
 
 export async function POST(request: NextRequest) {
@@ -268,16 +247,40 @@ export async function POST(request: NextRequest) {
     const token=request.cookies.get("sessao_noivos")?.value;
     if(token)await rpcAdmin("encerrar_sessao_organizacao_backend",{p_token_hash:tokenHash(token)}).catch(()=>null);
     const response=NextResponse.json({success:true});
-    response.cookies.set("sessao_noivos","",{httpOnly:true,secure:true,sameSite:"lax",path:"/",maxAge:0});
+    response.cookies.set("sessao_noivos","",{httpOnly:true,secure:true,sameSite:"strict",path:"/",maxAge:0});
     return response;
   }
   const codigo = data.codigo?.trim().toUpperCase();
   const identificador = data.usuario?.trim().toLowerCase() || codigo;
   const acoesConta = new Set(["estado_conta","criar_senha_conta","login_conta"]);
+  const acoesSessao = new Set(["controle_acesso","confirmar_chegada"]);
   if (acoesConta.has(data.action ?? "") && (!identificador || !/^(?:[A-Z0-9]{6}|[a-z0-9._-]{3,40})$/.test(identificador)))
     return NextResponse.json({ error: "Usuário ou código inválido." }, { status: 400 });
-  if (!acoesConta.has(data.action ?? "") && (!codigo || !/^[A-Z0-9]{6}$/.test(codigo)))
+  if (!acoesConta.has(data.action ?? "") && !acoesSessao.has(data.action ?? "") && (!codigo || !/^[A-Z0-9]{6}$/.test(codigo)))
     return NextResponse.json({ error: "Código inválido." }, { status: 400 });
+
+  if(data.action==="controle_acesso"){
+    const token=request.cookies.get("sessao_noivos")?.value;
+    if(!token)return NextResponse.json({error:"Faça login pela área da organização."},{status:401});
+    const busca=String(data.dados?.busca??"").trim().slice(0,150);
+    const response=await rpc("listar_controle_acesso",{p_token_hash:tokenHash(token),p_busca:busca||null});
+    if(!response?.ok)return NextResponse.json({error:"Não foi possível carregar o controle de entrada. Execute a migração mais recente."},{status:502});
+    const controle=await response.json();
+    if(!controle)return NextResponse.json({error:"Sessão expirada ou acesso não permitido."},{status:401});
+    return NextResponse.json({controle});
+  }
+  if(data.action==="confirmar_chegada"){
+    const token=request.cookies.get("sessao_noivos")?.value;
+    if(!token)return NextResponse.json({error:"Faça login pela área da organização."},{status:401});
+    const convidadoId=String(data.dados?.convidado_id??"");
+    if(!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(convidadoId))
+      return NextResponse.json({error:"Convidado inválido."},{status:400});
+    const response=await rpc("confirmar_chegada_evento",{p_token_hash:tokenHash(token),p_convidado_id:convidadoId});
+    if(!response?.ok)return NextResponse.json({error:"Não foi possível confirmar a chegada. Execute a migração mais recente."},{status:502});
+    const resultado=await response.json() as {ok?:boolean;motivo?:string};
+    if(!resultado?.ok)return NextResponse.json({error:resultado?.motivo==="ja_confirmada"?"A chegada desta pessoa já foi confirmada.":"Sessão expirada, acesso não permitido ou convidado inválido."},{status:403});
+    return NextResponse.json({success:true,resultado});
+  }
 
   if(data.action==="estado_conta"){
     const response=await rpc("estado_organizacao",{p_identificador:identificador});
@@ -318,34 +321,32 @@ export async function POST(request: NextRequest) {
     const response=await rpcAdmin("criar_sessao_organizacao_backend",{p_identificador:identificador,p_token_hash:tokenHash(token)});
     if(!response?.ok||(await response.json())!==true)return NextResponse.json({error:"Não foi possível iniciar a sessão."},{status:401});
     const result=NextResponse.json({success:true,exige_troca_senha:acesso.exige_troca_senha});
-    result.cookies.set("sessao_noivos",token,{httpOnly:true,secure:true,sameSite:"lax",path:"/",maxAge:604800});
+    result.cookies.set("sessao_noivos",token,{httpOnly:true,secure:true,sameSite:"strict",path:"/",maxAge:604800});
     return result;
   }
 
   if (data.action === "buscar") {
-    const codigoIndividualUnitario=await resolverConviteUnitario(codigo as string);
-    const codigoEfetivo=codigoIndividualUnitario??codigo;
-    const response = await rpc("buscar_convite", { p_codigo: codigoEfetivo });
+    const response = await rpc("buscar_convite", { p_codigo: codigo });
     if (!response) return NextResponse.json({ error: "Supabase não configurado." }, { status: 503 });
     if (!response.ok) return NextResponse.json({ error: "Não foi possível consultar o convite." }, { status: 502 });
     const conviteBruto = await response.json() as ConviteRpc | null;
     if (!conviteBruto) return NextResponse.json({ error: "Código não encontrado." }, { status: 404 });
     const conviteCompleto = await enriquecerFuncoesDoGrupo(
       conviteBruto,
-      codigoEfetivo as string,
+      codigo as string,
     );
     const convite = sanitizarFuncoesDoConvite(
       conviteCompleto,
-      codigoEfetivo as string,
+      codigo as string,
     );
     const giftsResponse=await rpc("listar_presentes",{});
-    return NextResponse.json({
-      convite,
-      presentes:giftsResponse?.ok?await giftsResponse.json():[],
-      mercado_pago_disponivel:await mercadoPagoDisponivel(),
-      convite_unitario:Boolean(codigoIndividualUnitario),
-      codigo_individual_destino:codigoIndividualUnitario,
-    });
+    return NextResponse.json({convite,presentes:giftsResponse?.ok?await giftsResponse.json():[],mercado_pago_disponivel:await mercadoPagoDisponivel()});
+  }
+  if(data.action==="confirmar_leitura_aviso_eleicoes"){
+    const response=await rpc("confirmar_leitura_aviso_eleicoes",{p_codigo:codigo});
+    if(!response?.ok)return NextResponse.json({error:"Não foi possível registrar a leitura. Execute a migração mais recente."},{status:502});
+    if((await response.json())!==true)return NextResponse.json({error:"Somente o responsável pelo convite pode confirmar a leitura."},{status:403});
+    return NextResponse.json({success:true});
   }
   if(data.action==="confirmar_presentes"){
     if(!Array.isArray(data.itens)||data.itens.length===0)return NextResponse.json({error:"O carrinho está vazio."},{status:400});
@@ -386,14 +387,14 @@ export async function POST(request: NextRequest) {
     const token=randomBytes(32).toString("base64url");
     const response=await rpcAdmin("criar_sessao_backend",{p_codigo:codigo,p_token_hash:tokenHash(token)});
     if(!response?.ok||(await response.json())!==true)return NextResponse.json({error:"Senha incorreta."},{status:401});
-    const result=NextResponse.json({success:true});result.cookies.set("sessao_noivos",token,{httpOnly:true,secure:true,sameSite:"lax",path:"/",maxAge:604800});return result;
+    const result=NextResponse.json({success:true});result.cookies.set("sessao_noivos",token,{httpOnly:true,secure:true,sameSite:"strict",path:"/",maxAge:604800});return result;
   }
   if(data.action==="dashboard"){
     const token=request.cookies.get("sessao_noivos")?.value;if(!token)return NextResponse.json({error:"Faça login novamente."},{status:401});
     const response=await rpc("dashboard_noivos",{p_token_hash:tokenHash(token)});
     if(!response?.ok)return NextResponse.json({error:"Não foi possível carregar o painel."},{status:502});
     const dashboard=await response.json();if(!dashboard)return NextResponse.json({error:"Sessão expirada."},{status:401});
-    if(dashboard.perfil!=="assessoria"){
+    if(["admin","noivos"].includes(String(dashboard.perfil))){
       const [configResponse,categoriasResponse]=await Promise.all([
         rpc("configuracoes_convites_dashboard",{p_token_hash:tokenHash(token)}),
         rpc("listar_categorias_presentes_dashboard",{p_token_hash:tokenHash(token)}),
@@ -455,7 +456,7 @@ export async function POST(request: NextRequest) {
     const acesso=await rpc("dashboard_noivos",{p_token_hash:tokenHash(token)});
     const painel=acesso?.ok?await acesso.json() as PainelAdministrativo|null:null;
     if(!painel)return NextResponse.json({error:"Sessão expirada."},{status:401});
-    if(painel.perfil==="assessoria")return NextResponse.json({error:"Acesso não permitido para a assessoria."},{status:403});
+    if(["assessoria","organizacao"].includes(String(painel.perfil)))return NextResponse.json({error:"Acesso não permitido para este perfil."},{status:403});
     const response=await rpc("listar_presentes",{});
     if(!response?.ok)return NextResponse.json({error:"Não foi possível carregar os presentes."},{status:502});
     return NextResponse.json({presentes:await response.json()});
@@ -645,6 +646,9 @@ export async function POST(request: NextRequest) {
         codigo_invalido:"O código deve ter exatamente 6 letras ou números.",
         codigo_indisponivel:"Esse código já está sendo usado por um convidado, grupo ou integrante da organização.",
         usuario_indisponivel:"Esse usuário já está em uso.",
+        funcao_protegida:"Somente a administração pode criar, alterar ou apagar perfis de noivos e administradores.",
+        nao_encontrado:"A pessoa da organização não foi encontrada.",
+        acesso_negado:"Seu perfil não pode realizar essa alteração.",
         dados_invalidos:"Confira o nome, o usuário, a função e o código informados.",
       };
       return NextResponse.json({error:mensagens[resultado.motivo??""]??"Acesso não permitido ou dados inválidos."},{status:403});

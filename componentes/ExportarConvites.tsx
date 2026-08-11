@@ -96,15 +96,11 @@ function montarPaginas(
           ? p.convite_id === pessoaReferencia.convite_id
           : normalizar(p.conjunto) === normalizar(pessoaReferencia.conjunto),
       );
-      const pessoasDoConvite = membros.length ? membros : [pessoaReferencia];
-      const pessoaUnica = pessoasDoConvite.length === 1 ? pessoasDoConvite[0] : null;
       paginas.push({
-        titulo: pessoaUnica?.nome ?? pessoasDoConvite[0]?.conjunto ?? pessoaReferencia.conjunto ?? "Convite",
-        pessoas: pessoasDoConvite,
-        url: pessoaUnica
-          ? `${base}/c/${pessoaUnica.codigo_individual}`
-          : `${base}/g/${pessoaReferencia.codigo}`,
-        codigo: pessoaUnica?.codigo_individual ?? pessoaReferencia.codigo,
+        titulo: membros[0]?.conjunto ?? pessoaReferencia.conjunto ?? "Convite",
+        pessoas: membros.length ? membros : [pessoaReferencia],
+        url: `${base}/g/${pessoaReferencia.codigo}`,
+        codigo: pessoaReferencia.codigo,
       });
     }
   }

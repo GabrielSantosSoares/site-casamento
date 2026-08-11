@@ -1,12 +1,10 @@
--- Mantém o código usado pelo presenteador sem impedir a leitura de pagamentos
--- antigos e reaplica a função de reserva de forma idempotente.
+-- Compatibilidade da lista de pagamentos e persistência do código usado para
+-- presentear. As demais correções desta versão são aplicadas no aplicativo.
 begin;
 
 alter table public.reservas_presentes
   add column if not exists codigo_doador text;
 
--- Pagamentos históricos não permitem descobrir com segurança qual integrante
--- do grupo pagou. Para esses registros, preserva-se o código geral do convite.
 update public.reservas_presentes r
 set codigo_doador = c.codigo
 from public.convites c
@@ -21,8 +19,7 @@ alter table public.reservas_presentes
   check (codigo_doador is null or codigo_doador ~ '^[A-Z0-9]{6}$');
 
 create index if not exists reservas_presentes_codigo_doador_idx
-  on public.reservas_presentes (codigo_doador, criado_em desc)
-  where meio = 'mercado_pago';
+  on public.reservas_presentes (codigo_doador, criado_em desc);
 
 create or replace function public.reservar_presentes_pagamento(
   p_codigo text,
@@ -55,16 +52,14 @@ begin
 
   select c.id into v_convite_id
   from public.convites c
-  where c.ativo = true
-    and (
-      c.codigo = v_codigo
-      or exists (
-        select 1
-        from public.convidados g
-        where g.convite_id = c.id
-          and g.codigo_individual = v_codigo
-      )
+  where c.ativo = true and (
+    c.codigo = v_codigo or exists (
+      select 1
+      from public.convidados g
+      where g.convite_id = c.id
+        and g.codigo_individual = v_codigo
     )
+  )
   limit 1;
 
   if v_convite_id is null
@@ -75,7 +70,8 @@ begin
     or nullif(trim(p_checkout_url), '') is null
     or p_tentativa_pagamento_ate <= now()
     or p_conciliacao_pagamento_ate <= p_tentativa_pagamento_ate
-  then return false;
+  then
+    return false;
   end if;
 
   for v_item in
@@ -91,8 +87,8 @@ begin
     where id = v_presente_id and ativo = true
     for update;
 
-    if not found or v_quantidade not between 1 and 20
-    then raise exception 'reserva_indisponivel';
+    if not found or v_quantidade not between 1 and 20 then
+      raise exception 'reserva_indisponivel';
     end if;
 
     select coalesce(sum(quantidade), 0)::integer into v_usada
@@ -100,11 +96,11 @@ begin
     where presente_id = v_presente_id
       and status in ('pendente', 'confirmado');
 
-    if v_total is not null and v_usada + v_quantidade > v_total
-    then raise exception 'reserva_indisponivel';
+    if v_total is not null and v_usada + v_quantidade > v_total then
+      raise exception 'reserva_indisponivel';
     end if;
 
-    insert into public.reservas_presentes(
+    insert into public.reservas_presentes (
       convite_id, presente_id, quantidade, status, meio, preferencia_id,
       external_reference, pagamento_status, tentativa_pagamento_ate,
       conciliacao_pagamento_ate, checkout_url, doador_chave, cpf_cifrado,
@@ -127,13 +123,13 @@ exception
 end $$;
 
 revoke all on function public.reservar_presentes_pagamento(
-  text, jsonb, text, text, text, timestamptz, timestamptz,
-  text, text, timestamptz, text, text
+  text, jsonb, text, text, text, timestamptz, timestamptz, text, text,
+  timestamptz, text, text
 ) from public;
 
 grant execute on function public.reservar_presentes_pagamento(
-  text, jsonb, text, text, text, timestamptz, timestamptz,
-  text, text, timestamptz, text, text
+  text, jsonb, text, text, text, timestamptz, timestamptz, text, text,
+  timestamptz, text, text
 ) to service_role;
 
 notify pgrst, 'reload schema';

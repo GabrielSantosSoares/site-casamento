@@ -96,8 +96,6 @@ type ConfigPagamento = {
 };
 type LinhaPagamento = {
   id: string;
-  convite_id: string;
-  presente_id: string;
   external_reference: string | null;
   pagamento_id: string | null;
   pagamento_status: string | null;
@@ -110,11 +108,11 @@ type LinhaPagamento = {
   aprovado_em: string | null;
   reembolso_id: string | null;
   reembolsado_em: string | null;
-  codigo_doador: string | null;
+  codigo_doador?: string | null;
   quantidade: number;
+  presentes?: { nome?: string } | null;
+  convites?: { nome_familia?: string; codigo?: string } | null;
 };
-type PresentePagamento = { id: string; nome: string };
-type ConvitePagamento = { id: string; nome_familia: string; codigo: string };
 type PagamentoAgrupado = {
   id: string;
   pagamento_id: string | null;
@@ -217,55 +215,38 @@ export async function GET(request: NextRequest) {
       { status: 403 },
     );
   const c = await config();
-  const colunasBase =
-    "id,convite_id,presente_id,external_reference,pagamento_id,pagamento_status,status,pagador_nome,pagador_email,meio_pagamento_detalhe,valor_transacao,criado_em,aprovado_em,reembolso_id,reembolsado_em,quantidade";
-  let tr = await table(
-    `reservas_presentes?meio=eq.mercado_pago&select=${colunasBase},codigo_doador&order=criado_em.desc`,
+  const camposBase =
+    "id,external_reference,pagamento_id,pagamento_status,status,pagador_nome,pagador_email,meio_pagamento_detalhe,valor_transacao,criado_em,aprovado_em,reembolso_id,reembolsado_em,quantidade,presentes(nome),convites(nome_familia,codigo)";
+  let consulta = await table(
+    `reservas_presentes?meio=eq.mercado_pago&select=${camposBase},codigo_doador&order=criado_em.desc`,
   );
-  let possuiCodigoDoador = true;
-  if (!tr.ok) {
-    // Compatibilidade com bancos que ainda não executaram a migração que
-    // adiciona codigo_doador. Uma coluna opcional não deve ocultar toda a
-    // lista de pagamentos já existente.
-    possuiCodigoDoador = false;
-    tr = await table(
-      `reservas_presentes?meio=eq.mercado_pago&select=${colunasBase}&order=criado_em.desc`,
+  let modoCompatibilidade = false;
+
+  // Bancos que ainda não executaram a migração do código do presenteador não
+  // devem perder toda a lista. O PostgREST rejeita a consulta inteira quando a
+  // coluna ainda não está no cache do schema, então repetimos sem esse campo.
+  if (!consulta.ok) {
+    modoCompatibilidade = true;
+    consulta = await table(
+      `reservas_presentes?meio=eq.mercado_pago&select=${camposBase}&order=criado_em.desc`,
     );
   }
-  if (!tr.ok)
+  if (!consulta.ok)
     return NextResponse.json(
       {
         error:
-          "Não foi possível consultar os pagamentos. Execute a migração mais recente no Supabase e tente novamente.",
+          "Não foi possível consultar os pagamentos no banco de dados. Tente atualizar novamente.",
       },
       { status: 502 },
     );
-  const rows = (await tr.json()) as LinhaPagamento[];
-  const [presentesResponse, convitesResponse] = await Promise.all([
-    table("presentes?select=id,nome"),
-    table("convites?select=id,nome_familia,codigo"),
-  ]);
-  const presentes = new Map(
-    presentesResponse.ok
-      ? ((await presentesResponse.json()) as PresentePagamento[]).map(
-          (presente) => [presente.id, presente.nome] as const,
-        )
-      : [],
-  );
-  const convites = new Map(
-    convitesResponse.ok
-      ? ((await convitesResponse.json()) as ConvitePagamento[]).map(
-          (convite) => [convite.id, convite] as const,
-        )
-      : [],
-  );
+
+  const rows = (await consulta.json()) as LinhaPagamento[];
   const agrupadas = new Map<string, PagamentoAgrupado>();
   for (const r of rows) {
     const id = String(r.pagamento_id || r.external_reference || r.id);
     const atual = agrupadas.get(id);
-    const convite = convites.get(r.convite_id);
     const item = {
-      nome: presentes.get(r.presente_id) || "Presente",
+      nome: r.presentes?.nome || "Presente",
       quantidade: r.quantidade,
     };
     if (atual) {
@@ -279,7 +260,7 @@ export async function GET(request: NextRequest) {
       status: r.status,
       pagamento_status: r.pagamento_status,
       pagador_nome:
-        r.pagador_nome || convite?.nome_familia || "Não identificado",
+        r.pagador_nome || r.convites?.nome_familia || "Não identificado",
       pagador_email: r.pagador_email,
       meio_pagamento: r.meio_pagamento_detalhe || "Mercado Pago",
       valor: r.valor_transacao,
@@ -287,9 +268,8 @@ export async function GET(request: NextRequest) {
       aprovado_em: r.aprovado_em,
       reembolso_id: r.reembolso_id,
       reembolsado_em: r.reembolsado_em,
-      convite_codigo: convite?.codigo,
-      codigo_presenteador:
-        (possuiCodigoDoador ? r.codigo_doador : null) || convite?.codigo,
+      convite_codigo: r.convites?.codigo,
+      codigo_presenteador: r.codigo_doador || r.convites?.codigo,
       itens: [item],
     });
   }
@@ -312,6 +292,9 @@ export async function GET(request: NextRequest) {
         }
       : null,
     pagamentos: [...agrupadas.values()],
+    aviso: modoCompatibilidade
+      ? "A lista foi carregada em modo de compatibilidade. Execute a migração 040 para exibir o código individual em todos os pagamentos."
+      : null,
   });
 }
 
@@ -621,7 +604,7 @@ export async function POST(request: NextRequest) {
           return {
             id: p.id,
             title: `Presente de casamento: ${p.nome}`,
-            description: `Doação do valor referente ao presente “${p.nome}” para Gabriel e Alanna. O item não será comprado pelo Mercado Pago.`.slice(
+            description: `Doação aos noivos do valor referente ao presente ${p.nome}. O item não será comprado pelo Mercado Pago.`.slice(
               0,
               256,
             ),
@@ -631,11 +614,7 @@ export async function POST(request: NextRequest) {
           };
         }),
         external_reference: external,
-        metadata: {
-          codigo_convidado: codigo,
-          convite_id: id.conviteId,
-          finalidade: "doacao_presente_casamento",
-        },
+        metadata: { codigo_convidado: codigo },
         ...(requerCpf ? { payer: { identification: { type: "CPF", number: cpf } } } : {}),
         back_urls: {
           success: `${origin}/c/${codigo}?pagamento=sucesso`,

@@ -3,15 +3,14 @@
   "version": "0.1.0",
   "private": true,
   "engines": {
-    "node": ">=22.13.0"
+    "node": "22.x"
   },
   "scripts": {
     "dev": "next dev",
-    "build": "next build --webpack",
+    "build": "next build",
     "start": "next start",
-    "lint": "eslint . --ignore-pattern .next",
-    "test:source": "node --test tests/function-access.test.mjs && node --test --test-name-pattern=\"keeps (login|group|import|gift|payment)\" tests/rendered-html.test.mjs",
-    "test": "npm run lint && npm run test:source && npm run build"
+    "lint": "eslint .",
+    "test": "npm run lint && npm run build && node --test tests/*.test.mjs"
   },
   "dependencies": {
     "@noble/hashes": "^2.2.0",
