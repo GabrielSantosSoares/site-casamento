@@ -95,9 +95,6 @@ type Organizacao = {
   principal: boolean;
   senha_criada: boolean;
   exige_troca_senha: boolean;
-  perfil_acesso?: "admin" | "noivos" | "assessoria" | "organizacao";
-  pode_editar?: boolean;
-  pode_excluir?: boolean;
 };
 type PresenteAdmin = {
   id: string;
@@ -163,20 +160,21 @@ const FUNCOES = [
   "Mãe da Noiva",
 ];
 const FUNCOES_ORGANIZACAO = [
-  "Assessoria",
-  "Fotógrafo",
-  "Film maker",
-  "Filmagem",
-  "Apoio",
+  "administrador",
+  "noivo",
+  "noiva",
+  "assessoria",
   "Pai do Noivo",
   "Mãe do Noivo",
   "Pai da Noiva",
   "Mãe da Noiva",
-  "Noivo",
-  "Noiva",
+  "Fotógrafo",
+  "Film Maker",
+  "Filmagem",
+  "Apoio",
 ];
 export type Dashboard = {
-  perfil: "noivos" | "assessoria" | "organizacao" | "admin";
+  perfil: "noivos" | "assessoria" | "admin";
   conta: {
     id: string;
     nome: string;
@@ -207,13 +205,6 @@ export type Dashboard = {
     atualizado_em: string;
   }>;
 };
-
-function tituloDoPerfil(perfil: Dashboard["perfil"]) {
-  if (perfil === "admin") return "Área do Administrador";
-  if (perfil === "noivos") return "Área dos Noivos";
-  if (perfil === "assessoria") return "Área da Assessoria";
-  return "Área da Organização";
-}
 
 function baixarCsv(
   nome: string,
@@ -406,8 +397,8 @@ export function DashboardNoivos({
       | "convidados"
       | "mensagens"
       | "notificacoes"
-      | "cortejo"
       | "presentes"
+      | "cortejo"
       | "organizacao"
       | "evento"
       | "senha"
@@ -440,6 +431,11 @@ export function DashboardNoivos({
       useState(0);
   const [pesquisa, setPesquisa] = useState("");
   const [pesquisaGrupos, setPesquisaGrupos] = useState("");
+  const [modoGestaoConvidados, setModoGestaoConvidados] = useState<
+      "convidados" | "grupos"
+    >("convidados"),
+    [grupoAberto, setGrupoAberto] = useState(""),
+    [pessoaParaGrupo, setPessoaParaGrupo] = useState("");
   const [grupoEditando, setGrupoEditando] = useState<Grupo | null>(null),
     [codigoGrupo, setCodigoGrupo] = useState(""),
     [tituloGrupo, setTituloGrupo] = useState(""),
@@ -449,7 +445,7 @@ export function DashboardNoivos({
     [orgNome, setOrgNome] = useState(""),
     [orgUsuario, setOrgUsuario] = useState(""),
     [orgCodigo, setOrgCodigo] = useState(""),
-    [orgFuncao, setOrgFuncao] = useState("Assessoria"),
+    [orgFuncao, setOrgFuncao] = useState("assessoria"),
     [orgAdmin, setOrgAdmin] = useState(false),
     [credenciaisGeradas, setCredenciaisGeradas] = useState<{
       codigo?: string;
@@ -517,12 +513,24 @@ export function DashboardNoivos({
       link_maps: null,
     },
   );
+  const funcaoContaNormalizada = normalizar(dados.conta.funcao);
+  const perfilPais = [
+    "pai do noivo",
+    "mae do noivo",
+    "pai da noiva",
+    "mae da noiva",
+  ].includes(funcaoContaNormalizada);
   const assessoria = dados.perfil === "assessoria";
-  const organizacaoRestrita = dados.perfil === "organizacao";
-  const perfilRestrito = assessoria || organizacaoRestrita;
   const admin = dados.perfil === "admin";
-  const noivos = dados.perfil === "noivos";
-  const podeGerirOrganizacao = admin || noivos || assessoria;
+  const noivos = dados.perfil === "noivos" || perfilPais;
+  const podeAdministrarConvidados = !assessoria || perfilPais;
+  const rotuloArea = admin
+    ? "Área do Administrador"
+    : perfilPais
+      ? `Área da Organização · ${dados.conta.funcao}`
+      : assessoria
+        ? "Área da Assessoria"
+        : "Área dos Noivos";
   const grupos = useMemo(
     () =>
       dados.grupos?.length
@@ -568,19 +576,20 @@ export function DashboardNoivos({
       normalizar(`${item.codigo} ${item.titulo}`).includes(termo),
     );
   }, [grupos, pesquisaGrupos]);
-  const pessoasDoCortejo = useMemo(
-    () =>
-      dados.convidados
-        .filter(
-          (pessoa) =>
-            Boolean(pessoa.funcao?.trim()) &&
-            normalizar(pessoa.funcao ?? "") !== "convidado",
-        )
-        .sort((a, b) =>
-          `${a.funcao} ${a.nome}`.localeCompare(`${b.funcao} ${b.nome}`, "pt-BR"),
-        ),
-    [dados.convidados],
-  );
+  const grupoAbertoDados = grupos.find((item) => item.codigo === grupoAberto) ?? null;
+  const pessoasDoGrupo = grupoAbertoDados
+    ? dados.convidados.filter((pessoa) => pessoa.codigo === grupoAbertoDados.codigo)
+    : [];
+  const pessoasForaDoGrupo = grupoAbertoDados
+    ? dados.convidados.filter((pessoa) => pessoa.codigo !== grupoAbertoDados.codigo)
+    : [];
+  const podeGerirMembroOrganizacao = (membro: Organizacao) =>
+    !membro.principal &&
+    (admin ||
+      (!membro.administrador &&
+        !["administrador", "noivo", "noiva"].includes(
+          membro.funcao.toLocaleLowerCase("pt-BR"),
+        )));
   const lista =
     filtro === "sim"
       ? dados.convidados.filter((p) => p.resposta === "sim")
@@ -1174,6 +1183,29 @@ export function DashboardNoivos({
       setCriancasExtras(0);
     }
   }
+  async function associarPessoaAoGrupo() {
+    if (!grupoAbertoDados || !pessoaParaGrupo) return;
+    const ok = await administrarGrupo("associar_pessoa", {
+      id: grupoAbertoDados.id,
+      convidado_id: pessoaParaGrupo,
+    });
+    if (ok) {
+      setPessoaParaGrupo("");
+      setAviso("Pessoa adicionada ao grupo com sucesso.");
+    }
+  }
+  async function tornarConviteIndividual(pessoa: Pessoa) {
+    if (
+      !confirm(
+        `Retirar ${pessoa.nome} deste grupo e criar um convite individual?`,
+      )
+    )
+      return;
+    const ok = await administrarGrupo("tornar_individual", {
+      convidado_id: pessoa.id,
+    });
+    if (ok) setAviso("A pessoa agora possui um convite individual.");
+  }
   async function salvar(e: FormEvent) {
     e.preventDefault();
     const codigoDesejado = codigoIndividual.trim().toUpperCase();
@@ -1182,7 +1214,7 @@ export function DashboardNoivos({
       return;
     }
     const ok = await administrar(
-      assessoria ? "editar_restrito" : editando ? (codigoDesejado ? "editar_com_codigo" : "editar") : "adicionar_com_codigo",
+      !podeAdministrarConvidados ? "editar_restrito" : editando ? (codigoDesejado ? "editar_com_codigo" : "editar") : "adicionar_com_codigo",
       {
         id: editando?.id,
         nome,
@@ -1538,12 +1570,30 @@ export function DashboardNoivos({
         <button className="back-link" onClick={() => setPagina("geral")}>
           ← Voltar à visão geral
         </button>
-        <p className="eyebrow">
-          {assessoria ? "Área da Assessoria" : "Área dos Noivos"}
-        </p>
+        <p className="eyebrow">{rotuloArea}</p>
         <h1>Lista completa de convidados</h1>
-        <div className="admin-actions">
-          {!assessoria && (
+        {podeAdministrarConvidados && (
+          <div className="management-switch" role="group" aria-label="Tipo de gestão">
+            <button
+              type="button"
+              className={modoGestaoConvidados === "convidados" ? "primary" : "secondary"}
+              aria-pressed={modoGestaoConvidados === "convidados"}
+              onClick={() => setModoGestaoConvidados("convidados")}
+            >
+              Gerenciar convidados
+            </button>
+            <button
+              type="button"
+              className={modoGestaoConvidados === "grupos" ? "primary" : "secondary"}
+              aria-pressed={modoGestaoConvidados === "grupos"}
+              onClick={() => setModoGestaoConvidados("grupos")}
+            >
+              Gerenciar grupos
+            </button>
+          </div>
+        )}
+        <div className="admin-actions" hidden={modoGestaoConvidados !== "convidados"}>
+          {podeAdministrarConvidados && (
             <button
               className="primary"
               onClick={() => {
@@ -1558,7 +1608,7 @@ export function DashboardNoivos({
               Adicionar pessoa
             </button>
           )}
-          {!assessoria && (
+          {podeAdministrarConvidados && (
             <>
               <button className="secondary" onClick={() => setPagina("exportar")}>
                 Exportar convites
@@ -1603,7 +1653,7 @@ export function DashboardNoivos({
               </button>
             </>
           )}
-          {!assessoria && (
+          {podeAdministrarConvidados && (
             <label className="secondary file-button">
               {importando ? "Importando..." : "Importar CSV ou Excel"}
               <input
@@ -1617,7 +1667,7 @@ export function DashboardNoivos({
             </label>
           )}
         </div>
-        {!assessoria && (
+        {podeAdministrarConvidados && modoGestaoConvidados === "grupos" && (
           <section className="guest-groups-section" aria-labelledby="grupos-convidados-title">
             <div className="section-heading-row">
               <div>
@@ -1655,11 +1705,11 @@ export function DashboardNoivos({
             <div className="inline-group-list">
               {gruposFiltrados.map((item) => (
                 <article key={item.id} className={grupo === item.codigo ? "selected" : ""}>
-                  <button type="button" className="group-summary" onClick={() => setGrupo(item.codigo)} aria-label={`Selecionar o grupo ${item.titulo}`}>
+                  <button type="button" className="group-summary" onClick={() => setGrupoAberto(item.codigo)} aria-label={`Abrir o grupo ${item.titulo}`}>
                     <b>{item.titulo}</b>
                     <small>{item.codigo} · {item.total} {item.total === 1 ? "pessoa" : "pessoas"}</small>
                   </button>
-                  {item.protegido && dados.perfil === "noivos" ? (
+                  {item.protegido && noivos ? (
                     <small>Grupo protegido</small>
                   ) : (
                     <button type="button" className="secondary compact" onClick={() => { setGrupoEditando(item); setCodigoGrupo(item.codigo); setTituloGrupo(item.titulo); setCriancasExtras(item.criancas_adicionais_limite); }}>
@@ -1670,9 +1720,78 @@ export function DashboardNoivos({
               ))}
               {!gruposFiltrados.length && <div className="empty-state">Nenhum grupo encontrado.</div>}
             </div>
+            {grupoAbertoDados && (
+              <section className="group-detail" aria-labelledby="grupo-aberto-title">
+                <div className="section-heading-row">
+                  <div>
+                    <p className="eyebrow">Grupo selecionado</p>
+                    <h3 id="grupo-aberto-title">{grupoAbertoDados.titulo}</h3>
+                    <p>
+                      Código {grupoAbertoDados.codigo} · {pessoasDoGrupo.length}{" "}
+                      {pessoasDoGrupo.length === 1 ? "pessoa" : "pessoas"}
+                    </p>
+                  </div>
+                  <button type="button" className="secondary" onClick={() => setGrupoAberto("")}>
+                    Fechar grupo
+                  </button>
+                </div>
+                <div className="group-members">
+                  {pessoasDoGrupo.map((pessoa) => (
+                    <article key={pessoa.id}>
+                      <div>
+                        <b>{pessoa.nome}</b>
+                        <small>
+                          {pessoa.funcao || "Convidado"} · código {pessoa.codigo_individual}
+                        </small>
+                      </div>
+                      {pessoasDoGrupo.length > 1 && (
+                        <button
+                          type="button"
+                          className="secondary compact"
+                          onClick={() => void tornarConviteIndividual(pessoa)}
+                        >
+                          Tornar individual
+                        </button>
+                      )}
+                    </article>
+                  ))}
+                  {!pessoasDoGrupo.length && (
+                    <div className="empty-state">Este grupo ainda não possui pessoas.</div>
+                  )}
+                </div>
+                <div className="group-add-member">
+                  <label htmlFor="pessoa-para-grupo">Adicionar pessoa já cadastrada</label>
+                  <div>
+                    <select
+                      id="pessoa-para-grupo"
+                      value={pessoaParaGrupo}
+                      onChange={(evento) => setPessoaParaGrupo(evento.target.value)}
+                    >
+                      <option value="">Selecione uma pessoa</option>
+                      {pessoasForaDoGrupo.map((pessoa) => (
+                        <option key={pessoa.id} value={pessoa.id}>
+                          {pessoa.nome} · {pessoa.conjunto} ({pessoa.codigo_individual})
+                        </option>
+                      ))}
+                    </select>
+                    <button
+                      type="button"
+                      className="primary"
+                      disabled={!pessoaParaGrupo}
+                      onClick={() => void associarPessoaAoGrupo()}
+                    >
+                      Adicionar ao grupo
+                    </button>
+                  </div>
+                  <small>
+                    A pessoa será movida do convite atual para este grupo; o código individual será preservado.
+                  </small>
+                </div>
+              </section>
+            )}
           </section>
         )}
-        {!assessoria && (
+        {podeAdministrarConvidados && modoGestaoConvidados === "convidados" && (
           <div className="admin-form guest-limit-form">
             <label>
               Idade máxima para criança{" "}
@@ -1690,16 +1809,16 @@ export function DashboardNoivos({
             <small>Padrão: 8 anos.</small>
           </div>
         )}
-        {(!assessoria || editando) && (
+        {modoGestaoConvidados === "convidados" && (podeAdministrarConvidados || editando) && (
           <form className="admin-form guest-editor-form" onSubmit={salvar}>
             <input
               placeholder="Nome da pessoa"
               value={nome}
               onChange={(e) => setNome(e.target.value)}
               required
-              disabled={assessoria}
+              disabled={!podeAdministrarConvidados}
             />
-            {!assessoria && (
+            {podeAdministrarConvidados && (
               <label>
                 Código individual {editando ? "" : "(opcional)"}
                 <input
@@ -1715,7 +1834,7 @@ export function DashboardNoivos({
                 <small>Use exatamente 6 letras ou números. A disponibilidade será confirmada ao salvar.</small>
               </label>
             )}
-            <SeletorGrupo grupos={grupos} valor={grupo} onChange={setGrupo} disabled={assessoria} />
+            <SeletorGrupo grupos={grupos} valor={grupo} onChange={setGrupo} disabled={!podeAdministrarConvidados} />
             <select value={funcao} onChange={(e) => setFuncao(e.target.value)}>
               <option value="">Convidado</option>
               {FUNCOES.slice(1).map((f) => (
@@ -1727,7 +1846,7 @@ export function DashboardNoivos({
               <select
                 value={origem}
                 onChange={(e) => setOrigem(e.target.value as OrigemConvidado)}
-                disabled={assessoria}
+                disabled={!podeAdministrarConvidados}
               >
                 <option value="nao_classificado">Não classificado</option>
                 <option value="noivo">Noivo</option>
@@ -1735,7 +1854,7 @@ export function DashboardNoivos({
                 <option value="ambos">Ambos</option>
               </select>
             </label>
-            {!assessoria && (
+            {podeAdministrarConvidados && (
               <label className="guest-checkbox">
                 <input
                   type="checkbox"
@@ -1745,7 +1864,7 @@ export function DashboardNoivos({
                 Marcar como criança
               </label>
             )}
-            {!assessoria && editando && (
+            {podeAdministrarConvidados && editando && (
               <label className="guest-checkbox">
                 <input
                   type="checkbox"
@@ -1760,7 +1879,7 @@ export function DashboardNoivos({
             </button>
           </form>
         )}
-        <div className="guest-search">
+        <div className="guest-search" hidden={modoGestaoConvidados !== "convidados"}>
           <label htmlFor="pesquisa-convidado">Pesquisar convidado</label>
           <input
             id="pesquisa-convidado"
@@ -1784,7 +1903,7 @@ export function DashboardNoivos({
             {aviso}
           </p>
         )}
-        <div className="admin-table guest-admin-table">
+        <div className="admin-table guest-admin-table" hidden={modoGestaoConvidados !== "convidados"}>
           <div className="table-head">
             <span>Pessoa</span>
             <span>Conjunto</span>
@@ -1843,7 +1962,7 @@ export function DashboardNoivos({
                     ? new Date(p.expira_em).toLocaleString("pt-BR")
                     : "Prazo removido"}
                 </small>
-                {!assessoria && (
+                {podeAdministrarConvidados && (
                   <>
                     <input
                       aria-label={`Nova data limite de ${p.nome}`}
@@ -1877,9 +1996,9 @@ export function DashboardNoivos({
               </span>
               <span>
                 <button onClick={() => abrirEdicao(p)}>
-                  Editar função{assessoria ? "" : " e dados"}
+                  Editar função{podeAdministrarConvidados ? " e dados" : ""}
                 </button>
-                {!assessoria && (
+                {podeAdministrarConvidados && (
                   <button
                     className="danger"
                     onClick={() =>
@@ -1894,10 +2013,10 @@ export function DashboardNoivos({
             </div>
           ))}
         </div>
-        {!convidadosFiltrados.length && (
+        {modoGestaoConvidados === "convidados" && !convidadosFiltrados.length && (
           <div className="empty-state">Nenhum convidado encontrado.</div>
         )}
-        {!!duplicidades.length && (
+        {modoGestaoConvidados === "convidados" && !!duplicidades.length && (
           <div className="modal-backdrop" role="presentation">
             <section
               className="duplicate-modal"
@@ -1964,65 +2083,6 @@ export function DashboardNoivos({
             </section>
           </div>
         )}
-      </div>
-    );
-
-  if (pagina === "cortejo")
-    return (
-      <div className="panel admin-page procession-page">
-        <button className="back-link" onClick={() => setPagina("geral")}>
-          ← Voltar à visão geral
-        </button>
-        <p className="eyebrow">{tituloDoPerfil(dados.perfil)}</p>
-        <h1>Visão do cortejo</h1>
-        <p>
-          Relação das pessoas com função no casamento e a situação atual da
-          confirmação de presença.
-        </p>
-        <div className="procession-summary">
-          <span>
-            <b>{pessoasDoCortejo.length}</b>
-            <small>Pessoas no cortejo</small>
-          </span>
-          <span>
-            <b>{pessoasDoCortejo.filter((p) => p.resposta === "sim").length}</b>
-            <small>Confirmadas</small>
-          </span>
-          <span>
-            <b>{pessoasDoCortejo.filter((p) => p.resposta !== "sim").length}</b>
-            <small>Sem confirmação positiva</small>
-          </span>
-        </div>
-        <div className="procession-list">
-          {pessoasDoCortejo.map((pessoa) => (
-            <article key={pessoa.id}>
-              <div>
-                <b>{pessoa.nome}</b>
-                <small>
-                  {pessoa.funcao} · {pessoa.conjunto}
-                </small>
-              </div>
-              <span
-                className={`attendance-status ${
-                  pessoa.resposta === "sim"
-                    ? "confirmed"
-                    : pessoa.resposta === "nao"
-                      ? "declined"
-                      : "waiting"
-                }`}
-              >
-                {pessoa.resposta === "sim"
-                  ? "Presença confirmada"
-                  : pessoa.resposta === "nao"
-                    ? "Não poderá ir"
-                    : "Aguardando resposta"}
-              </span>
-            </article>
-          ))}
-          {!pessoasDoCortejo.length && (
-            <div className="empty-state">Nenhuma função do cortejo cadastrada.</div>
-          )}
-        </div>
       </div>
     );
 
@@ -2569,9 +2629,8 @@ export function DashboardNoivos({
           </label>
           <small>
             Ao ativar e salvar, o nome do espaço, o endereço e o Google Maps
-            ficarão visíveis somente nas áreas internas, depois do acesso por
-            código ou login. A página pública continuará mostrando apenas data,
-            horário e cidade.
+            ficarão visíveis somente na área interna de convidados e da
+            organização. A página pública continuará mostrando apenas a cidade.
           </small>
           <button className="primary">Salvar informações</button>
         </form>
@@ -2583,19 +2642,71 @@ export function DashboardNoivos({
       </div>
     );
 
+  if (pagina === "cortejo") {
+    const cortejo = dados.convidados.filter(
+      (pessoa) =>
+        Boolean(pessoa.funcao?.trim()) &&
+        pessoa.funcao?.toLocaleLowerCase("pt-BR") !== "convidado",
+    );
+    return (
+      <div className="panel admin-page">
+        <button className="back-link" onClick={() => setPagina("geral")}>
+          ← Voltar à visão geral
+        </button>
+        <p className="eyebrow">Cerimônia</p>
+        <h1>Visão do cortejo</h1>
+        <p>Pessoas com função no casamento e situação atual da confirmação.</p>
+        <div className="admin-table procession-table">
+          <div className="table-head">
+            <span>Pessoa</span>
+            <span>Função</span>
+            <span>Convite</span>
+            <span>Presença</span>
+          </div>
+          {cortejo.map((pessoa) => (
+            <div className="table-row" key={pessoa.id}>
+              <span>
+                <b>{pessoa.nome}</b>
+                <small>{pessoa.codigo_individual}</small>
+              </span>
+              <span><b>{pessoa.funcao}</b></span>
+              <span>
+                <b>{pessoa.conjunto}</b>
+                <small>{pessoa.codigo}</small>
+              </span>
+              <span>
+                <b>
+                  {pessoa.resposta === "sim"
+                    ? "Confirmada"
+                    : pessoa.resposta === "nao"
+                      ? "Não comparecerá"
+                      : "Aguardando resposta"}
+                </b>
+                {pessoa.status === "expirado" && <small>Convite expirado</small>}
+              </span>
+            </div>
+          ))}
+        </div>
+        {!cortejo.length && (
+          <div className="empty-state">Nenhuma pessoa do cortejo cadastrada.</div>
+        )}
+      </div>
+    );
+  }
+
   if (pagina === "organizacao")
     return (
       <div className="panel admin-page">
         <button className="back-link" onClick={() => setPagina("geral")}>
           ← Voltar à visão geral
         </button>
-        <p className="eyebrow">{tituloDoPerfil(dados.perfil)}</p>
+        <p className="eyebrow">Organização do casamento</p>
         <h1>Organização</h1>
         <p>
-          Noivos, pais, assessoria e equipe do evento ficam separados da lista
-          de convidados. As funções podem ser personalizadas.
+          Noivos, assessoria e administradores ficam separados da lista de
+          convidados.
         </p>
-        {podeGerirOrganizacao && (
+        {(admin || noivos || assessoria) && (
           <form
             className="admin-form organization-form"
             onSubmit={async (e) => {
@@ -2616,7 +2727,7 @@ export function DashboardNoivos({
                 setOrgNome("");
                 setOrgUsuario("");
                 setOrgCodigo("");
-                setOrgFuncao("Assessoria");
+                setOrgFuncao("assessoria");
                 setOrgAdmin(false);
               }
             }}
@@ -2672,20 +2783,18 @@ export function DashboardNoivos({
                 value={orgFuncao}
                 onChange={(e) => setOrgFuncao(e.target.value.slice(0, 80))}
                 placeholder="Escolha ou digite uma nova função"
-                maxLength={80}
                 required
               />
               <datalist id="funcoes-organizacao">
-                {FUNCOES_ORGANIZACAO.filter(
-                  (item) => admin || !["Noivo", "Noiva"].includes(item),
-                ).map((item) => (
-                  <option key={item} value={item} />
-                ))}
+                {FUNCOES_ORGANIZACAO
+                  .filter((funcaoDisponivel) =>
+                    admin || !["administrador", "noivo", "noiva"].includes(funcaoDisponivel),
+                  )
+                  .map((funcaoDisponivel) => (
+                    <option key={funcaoDisponivel} value={funcaoDisponivel} />
+                  ))}
               </datalist>
-              <small>
-                Sugestões: fotógrafo, film maker, filmagem e apoio. Você também
-                pode digitar uma nova função.
-              </small>
+              <small>Você também pode digitar uma nova função.</small>
             </label>
             {admin && (
               <label className="organization-checkbox">
@@ -2733,7 +2842,7 @@ export function DashboardNoivos({
                 </small>
               </div>
               <div className="expiry-actions">
-                {!o.principal && (o.pode_editar ?? admin) && (
+                {podeGerirMembroOrganizacao(o) && (
                   <>
                     <button
                       onClick={() => {
@@ -2769,19 +2878,16 @@ export function DashboardNoivos({
                     >
                       Definir senha
                     </button>
+                    <button
+                      className="danger"
+                      onClick={() =>
+                        confirm(`Apagar ${o.nome} da organização?`) &&
+                        administrarOrganizacao("apagar", { id: o.id })
+                      }
+                    >
+                      Apagar
+                    </button>
                   </>
-                )}
-                {!o.principal && (o.pode_excluir ?? admin) && (
-                  <button
-                    className="danger"
-                    onClick={() =>
-                      confirm(
-                        `Apagar ${o.nome} da organização? O acesso dessa pessoa será encerrado.`,
-                      ) && administrarOrganizacao("excluir", { id: o.id })
-                    }
-                  >
-                    Apagar
-                  </button>
                 )}
                 {o.principal && <small>Administrador principal</small>}
               </div>
@@ -3284,24 +3390,22 @@ export function DashboardNoivos({
   ] as const;
   return (
     <div className="panel dashboard">
-      <p className="eyebrow">{tituloDoPerfil(dados.perfil)}</p>
+      <p className="eyebrow">{rotuloArea}</p>
       <h1>Visão geral dos convidados</h1>
       <div className="dashboard-nav">
-        {!organizacaoRestrita && (
-          <button className="primary" onClick={() => setPagina("convidados")}>
-            Lista de convidados
-          </button>
-        )}
+        <button className="primary" onClick={() => setPagina("convidados")}>
+          Lista de convidados
+        </button>
         <button className="secondary" onClick={() => setPagina("cortejo")}>
           Cortejo
         </button>
         <button className="secondary" onClick={() => setPagina("organizacao")}>
           Organização
         </button>
-        <a className="secondary dashboard-link" href="/lista">
+        <button className="secondary" onClick={() => window.location.assign("/lista")}>
           Controle de entrada
-        </a>
-        {!perfilRestrito && (
+        </button>
+        {!assessoria && (
           <button className="secondary" onClick={() => setPagina("evento")}>
             Data e local
           </button>
@@ -3309,7 +3413,7 @@ export function DashboardNoivos({
         <button className="secondary" onClick={() => setPagina("senha")}>
           Alterar minha senha
         </button>
-        {!perfilRestrito && (
+        {!assessoria && (
           <>
             <button
               className="secondary"
@@ -3366,7 +3470,7 @@ export function DashboardNoivos({
       </div>
       <div className="metric-grid">
         {cards
-          .filter(([, , f]) => !perfilRestrito || f !== "presentes")
+          .filter(([, , f]) => !assessoria || f !== "presentes")
           .map(([l, v, f]) => (
             <button
               key={l}

@@ -11,13 +11,13 @@ evento.
 - `/g/CODIGO` — convite de grupo em modo de consulta;
 - `/x` — acesso da organização por usuário ou código (o primeiro cadastro é
   reservado ao administrador principal);
-- `/lista` — controle de chegada para noivos, organização e administração;
+- `/lista` — controle de entrada para a organização;
 - `/politica-de-privacidade` — política usada no consentimento de CPF.
 
-Os perfis da organização ficam separados dos convidados e aceitam funções
-personalizadas. Pais dos noivos recebem o mesmo nível de acesso da assessoria.
-Somente um código individual marcado como responsável pode confirmar presenças
-ou adicionar crianças ao grupo.
+Os perfis de organização (`administrador`, `noivo`, `noiva`, `assessoria` e os
+quatro perfis de pais dos noivos) ficam separados dos convidados. Os pais podem
+administrar convidados, grupos e integrantes não protegidos da organização,
+sem receber acesso às configurações financeiras do administrador principal.
 
 ## Variáveis de ambiente
 
@@ -54,18 +54,18 @@ supabase/migration_037_edicao_presentes_entregas_ilimitados.sql
 supabase/migration_038_funcoes_individuais_manuais_criancas.sql
 supabase/migration_039_responsaveis_criancas_trajes.sql
 supabase/migration_040_retorno_pagamentos_convites_unitarios.sql
-supabase/migration_041_privacidade_local_cortejo_organizacao_checkin.sql
+supabase/migration_042_pais_convites_grupos_controle_entrada.sql
 ```
 
-As migrações 033 a 041 corrigem permissões dos perfis, confirmação por
+As migrações 033 a 037 corrigem permissões dos perfis, confirmação por
 responsável, sessões de logout, redefinição temporária de senha, notificações,
 proteção dos códigos individuais, códigos da organização, grupos integrados,
 duplicidades na importação e cadastro/remoção manual de presentes. Novas senhas
 temporárias têm oito dígitos, e os acessos antigos de seis dígitos continuam
-aceitos até a troca obrigatória. A migração 041 também protege o endereço na
-página pública, habilita funções livres da organização, reconhece os perfis dos
-pais, adiciona o aviso de presença e cria o controle de chegada. A instalação
-completa já contém todas essas migrações.
+aceitos até a troca obrigatória. A instalação completa já contém todas essas
+migrações. A migração 042 habilita os perfis dos pais, a associação de pessoas
+existentes a grupos, a transformação em convite individual e o controle de
+entrada. Ela também corrige as permissões necessárias para esses fluxos.
 
 ## Desenvolvimento e validação
 
@@ -77,19 +77,17 @@ npm run lint
 npm test
 ```
 
-`npm test` executa a análise estática, gera o build nativo do Next.js e roda a
-suíte de regressão.
+`npm test` executa a análise estática e os testes de regressão. `npm run build`
+gera o artefato nativo do Next.js usado pela Vercel.
 
-## Publicação no GitHub e Vercel
+## Publicação no GitHub e na Vercel
 
 1. Envie o conteúdo desta pasta para um repositório GitHub.
-2. Importe o repositório na Vercel; o framework Next.js será detectado.
+2. Importe o repositório na Vercel com o preset **Next.js**.
 3. Cadastre na Vercel as variáveis listadas em `.env.example`.
-4. Em uma instalação existente, execute a migração `041` no SQL Editor do
-   Supabase. Para um banco vazio, execute somente o instalador completo.
-
-Não exponha `SUPABASE_SECRET_KEY`, `ADMIN_SETUP_KEY` ou
-`MP_CREDENTIAL_ENCRYPTION_KEY` no navegador ou no repositório.
+4. Execute no Supabase a migração 042, ou o instalador completo em um banco novo.
+5. Publique. A Vercel usará automaticamente `npm run build` com o compilador
+   Webpack compatível com este projeto.
 
 ## Pagamentos
 

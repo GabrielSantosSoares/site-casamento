@@ -130,9 +130,7 @@ export default function Administracao() {
                 ? "Administração"
                 : dashboard.perfil === "assessoria"
                   ? "Área da Assessoria"
-                  : dashboard.perfil === "organizacao"
-                    ? "Área da Organização"
-                    : "Área dos Noivos"}
+                  : "Área dos Noivos"}
             </span>
           </span>
           <button className="exit" onClick={() => void sair()}>

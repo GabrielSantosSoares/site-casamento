@@ -124,12 +124,12 @@ export function ListaPresentes({
             <p className="eyebrow">Antes de escolher</p>
             <h2>Sua presença é o que importa</h2>
             <p>
-              Inicialmente tínhamos planejados não fazer uma lista, mas cedemos
-              aos pedidos carinhos de alguns amigos e familiares. A lista é
+              Inicialmente tínhamos planejado não fazer uma lista, mas cedemos
+              aos pedidos carinhosos de alguns amigos e familiares. A lista é
               apenas uma sugestão para quem deseja nos presentear. O mais
               importante para nós é ter você conosco, celebrando esse novo
-              começo! Sintam-se totalmente livres - a presença e o afeto de
-              vocês no nosso grande dia já são o nosso melhor presente
+              começo! Sintam-se totalmente livres — a presença e o afeto de
+              vocês no nosso grande dia já são o nosso melhor presente.
             </p>
             <button className="primary" onClick={() => setAvisoAberto(false)}>
               Entendi

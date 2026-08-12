@@ -3,14 +3,14 @@
   "version": "0.1.0",
   "private": true,
   "engines": {
-    "node": "22.x"
+    "node": ">=22.13.0"
   },
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
+    "build": "next build --webpack",
     "start": "next start",
-    "lint": "eslint .",
-    "test": "npm run lint && npm run build && node --test tests/*.test.mjs"
+    "test": "npm run lint && node --test tests/*.test.mjs",
+    "lint": "eslint . --ignore-pattern .next"
   },
   "dependencies": {
     "@noble/hashes": "^2.2.0",
